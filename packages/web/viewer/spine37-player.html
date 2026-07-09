@@ -9,6 +9,7 @@
     canvas { width: 100%; height: 100%; display: block; }
   </style>
   <script src="vendor/spine-webgl-3.7.js"></script>
+  <script src="spine-bake.js"></script>
 </head>
 <body>
   <canvas id="canvas"></canvas>
@@ -26,6 +27,9 @@
     const canvas = document.getElementById('canvas');
     let renderer = null;
     let instance = null;
+    // Raw assets kept from boot so the parent page can bake frames with the
+    // 3.7 runtime (same-origin direct call: contentWindow.bakeFrames(...)).
+    let bootAssets = null;
     let playing = true;
     let lastTs = 0;
     let zoomMode = 'fit'; // 'fit' or numeric scale (1 = original size)
@@ -138,10 +142,8 @@
       drawFrame();
     }
 
-    async function boot() {
-      if (!skelUrl || !atlasUrl) throw new Error('缺少 skel/atlas 参数');
-      if (!window.spine?.webgl) throw new Error('Spine 3.7 runtime 未加载');
-
+    /** Fetch skeleton/atlas/pages for a pack; JSON comes back 3.7-shaped. */
+    async function loadAssets(skelUrl, atlasUrl) {
       const [skelRaw, atlasRaw] = await Promise.all([
         fetch(skelUrl).then((r) => {
           if (!r.ok) throw new Error(`skeleton.json ${r.status}`);
@@ -165,6 +167,15 @@
           missingPages.push(page.page);
         }
       }
+      return { skelRaw, skeletonJson: skeletonForSpine37(skelRaw), atlasText, images, missingPages };
+    }
+
+    async function boot() {
+      // No params → the page is being used as a hidden bake host only.
+      if (!skelUrl || !atlasUrl) return;
+      if (!window.spine?.webgl) throw new Error('Spine 3.7 runtime 未加载');
+
+      const { skelRaw, atlasText, images, missingPages } = await loadAssets(skelUrl, atlasUrl);
 
       canvas.width = canvas.clientWidth || 760;
       canvas.height = canvas.clientHeight || 480;
@@ -189,6 +200,8 @@
       const anims = skeletonData.animations.map((a) => a.name);
       const def = startAnim && anims.includes(startAnim) ? startAnim : anims[0];
       if (def) state.setAnimation(0, def, true);
+
+      bootAssets = { skeletonJson: skeletonForSpine37(skelRaw), atlasText, images };
 
       const offset = new spine.Vector2();
       const size = new spine.Vector2();
@@ -230,6 +243,18 @@
         zoomMode = msg.mode ?? 'fit';
       }
     });
+
+    /** Called by the parent viewer (same origin) to bake with the 3.7 runtime. */
+    window.bakeFrames = function (opts, onProgress) {
+      if (!bootAssets) return Promise.reject(new Error('3.7 播放器尚未加载完成'));
+      return spineBakeFrames({ ...bootAssets, ...opts }, onProgress);
+    };
+
+    /** Batch entry: bake an arbitrary pack by URL (hidden-iframe bake host). */
+    window.bakeFromUrls = async function ({ skelUrl, atlasUrl, ...opts }, onProgress) {
+      const { skeletonJson, atlasText, images } = await loadAssets(skelUrl, atlasUrl);
+      return spineBakeFrames({ skeletonJson, atlasText, images, ...opts }, onProgress);
+    };
 
     boot().catch((err) => {
       console.error(err);

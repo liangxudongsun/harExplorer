@@ -3,6 +3,7 @@ import { join, basename } from 'path';
 import { scanCocosHar, tagCocosTextures } from './parse-import.mjs';
 import { extractCocosAnimationPacks, bakeAnimationFrames } from './extract-animations.mjs';
 import { parseAtlasPages, normalizeSkeletonJsonForRuntime } from './spine-extract.mjs';
+import { extractBitmapFonts, matchAllFontTextures, fntConfigToBmFont, glyphPreview, fontAtlasExtent } from './bitmap-font.mjs';
 
 const TEXTURE_EXT = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif',
@@ -262,6 +263,70 @@ function writeAnimationPacks(outDir, tabId, packs) {
   return manifest;
 }
 
+/**
+ * Extract cc.BitmapFont assets, write <name>.fnt + <name>.png under
+ * fonts/<tabId>/<id>/ and return the manifest (also inlined into the tab so
+ * the viewer needs no extra fetch).
+ */
+function writeBitmapFonts(outDir, tabId, entries, textures) {
+  const fonts = extractBitmapFonts(entries);
+  if (!fonts.length) return [];
+  const fontsDir = join(outDir, 'fonts', tabId);
+  const manifest = [];
+  const importTexts = new Map();
+  for (const e of entries) {
+    const url = e.request?.url ?? '';
+    if (!/\/import\//.test(url)) continue;
+    const c = e.response?.content;
+    if (!c?.text) continue;
+    const text = c.encoding === 'base64' ? Buffer.from(c.text, 'base64').toString('utf8') : c.text;
+    if (text.includes('fontDefDictionary')) importTexts.set(url, text);
+  }
+  const texByFont = matchAllFontTextures(fonts, textures, importTexts);
+
+  for (const font of fonts) {
+    const id = safeAnimId(font.fontName);
+    const tex = texByFont.get(font.fontName) ?? null;
+    const dir = join(fontsDir, id);
+    mkdirSync(dir, { recursive: true });
+
+    // Keep the texture's real format (CC3 often ships webp, not png).
+    const texExt = tex?.src?.match(/(\.[a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? '.png';
+    const pngName = `${id}${texExt}`;
+    const fntName = `${id}.fnt`;
+    let pngUrl = null;
+    if (tex) {
+      const abs = join(outDir, tex.src);
+      if (existsSync(abs)) {
+        writeFileSync(join(dir, pngName), readFileSync(abs));
+        pngUrl = `fonts/${tabId}/${id}/${pngName}`;
+      }
+    }
+    writeFileSync(join(dir, fntName), fntConfigToBmFont(font.fntConfig, font.fontName, pngName), 'utf8');
+
+    const defs = font.fntConfig.fontDefDictionary ?? {};
+    const extent = fontAtlasExtent(font.fntConfig);
+    manifest.push({
+      id,
+      name: font.fontName,
+      fontSize: font.fntConfig.fontSize ?? null,
+      commonHeight: font.fntConfig.commonHeight ?? null,
+      glyphCount: Object.keys(defs).length,
+      glyphs: glyphPreview(defs),
+      atlasWidth: tex?.width ?? extent.w,
+      atlasHeight: tex?.height ?? extent.h,
+      textureFileName: tex?.fileName ?? null,
+      importUrl: font.importUrl,
+      fntUrl: `fonts/${tabId}/${id}/${fntName}`,
+      pngUrl,
+      fontDefDictionary: defs,
+    });
+  }
+
+  writeFileSync(join(fontsDir, 'manifest.json'), JSON.stringify({ tabId, items: manifest }, null, 2));
+  return manifest;
+}
+
 function fmtSize(size) {
   if (size >= 1048576) return `${(size / 1048576).toFixed(2)} MB`;
   if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
@@ -351,6 +416,7 @@ export function buildCocosTab(harPath, outDir, src) {
   }
   const tagged = tagCocosTextures(textures, scan, animExtract.spinePacks);
   const animationManifest = writeAnimationPacks(outDir, src.id, animExtract.all);
+  const fontManifest = writeBitmapFonts(outDir, src.id, entries, textures);
   const resourceTypes = [...new Set(tagged.textures.map((t) => t.resourceType))].sort();
 
   return {
@@ -370,12 +436,14 @@ export function buildCocosTab(harPath, outDir, src) {
       channel: /client_type=web/i.test(pageTitle) ? 'web' : 'unknown',
       harEntries: entries.length,
       previewCount: animationManifest.length,
+      fontCount: fontManifest.length,
       ...tagged.meta,
     },
     textures: tagged.textures,
     spineAssets: tagged.spineAssets,
     sequenceSummary: tagged.sequenceSummary,
     animationManifest,
+    fontManifest,
     categories: [...new Set(tagged.textures.map((t) => t.category))].sort(),
     extensions: [...new Set(tagged.textures.map((t) => t.ext))].sort(),
     resourceTypes,

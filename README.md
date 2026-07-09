@@ -40,6 +40,10 @@ npm run spine -- samples/play.godeebxp.com.har --names symbol_08 --layout bare -
 npm run font -- samples/play.godeebxp.com.har --name countup_01 --out dist/font-export
 
 npm run build -- samples/game.har --out dist/texture-viewer
+
+# Spine 转序列帧（透明 PNG，默认 30fps，自动匹配 3.7/3.8 runtime）
+npm run bake -- dist/spine-export/symbol_08 --fps 30 --out dist/frames/symbol_08
+npm run bake -- dist/texture-viewer/animations/golden-seth/f_times --anim loop_2 --scale 2
 ```
 
 ## 从 perlab 迁移

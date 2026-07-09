@@ -14,6 +14,7 @@
     "serve": "node packages/web/server.mjs",
     "spine": "node packages/cli/src/extract-cocos-spine-packs.mjs",
     "font": "node packages/cli/src/extract-bitmap-font.mjs",
+    "bake": "node packages/cli/src/spine-to-frames.mjs",
     "spine-player": "node packages/cli/src/serve-spine-player.mjs"
   },
   "engines": {

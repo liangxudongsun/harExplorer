@@ -49,10 +49,10 @@ if (existsSync(vendorSrc)) {
   mkdirSync(vendorOut, { recursive: true });
   cpSync(vendorSrc, vendorOut, { recursive: true });
 }
-// Standalone Spine 3.7 sub-player, embedded by the viewer in an iframe.
-const player37 = join(__dirname, '..', '..', 'web', 'viewer', 'spine37-player.html');
-if (existsSync(player37)) {
-  cpSync(player37, join(OUT_DIR, 'spine37-player.html'));
+// Standalone Spine 3.7 sub-player (iframe) + shared frame baker.
+for (const extra of ['spine37-player.html', 'spine-bake.js']) {
+  const src = join(__dirname, '..', '..', 'web', 'viewer', extra);
+  if (existsSync(src)) cpSync(src, join(OUT_DIR, extra));
 }
 
 console.log(JSON.stringify({

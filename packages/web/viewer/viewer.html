@@ -262,19 +262,49 @@
     }
     .mode-tab.active { color: var(--text); border-color: var(--accent2); background: rgba(167,139,250,0.12); }
     .mode-tab:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-    #anim-wrap {
+    #anim-wrap, #font-wrap {
       flex: 1;
       min-width: 0;
       display: none;
       overflow: hidden;
     }
-    #anim-wrap.open { display: flex; }
-    #anim-list {
+    #anim-wrap.open, #font-wrap.open { display: flex; }
+    #anim-list, #font-list {
       width: 300px;
       flex-shrink: 0;
       border-right: 1px solid var(--border);
       overflow-y: auto;
       padding: 12px;
+    }
+    #font-stage {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      overflow-y: auto;
+      gap: 14px;
+    }
+    .font-panel {
+      background: #12151c;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      padding: 14px;
+      flex-shrink: 0;
+    }
+    .font-panel h3 { margin: 0 0 10px; font-size: 0.82rem; color: var(--muted); font-weight: 600; }
+    #font-sample-canvas { max-width: 100%; image-rendering: pixelated; }
+    #font-atlas-img {
+      max-width: 100%;
+      max-height: 420px;
+      image-rendering: pixelated;
+      background:
+        conic-gradient(#20242e 0 25%, #181c24 0 50%, #20242e 0 75%, #181c24 0) 0 0 / 24px 24px;
+      border-radius: 6px;
+    }
+    #font-sample-input {
+      width: min(420px, 100%); background: #10131a; color: var(--fg);
+      border: 1px solid #2a3140; border-radius: 6px; padding: 6px 8px; margin-bottom: 10px;
     }
     .anim-item {
       padding: 10px 12px;
@@ -329,6 +359,22 @@
     }
     .anim-controls button:hover { border-color: var(--accent); }
     .anim-controls label { font-size: 0.82rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    .anim-controls input[type="number"] {
+      width: 56px; background: #10131a; color: var(--fg);
+      border: 1px solid #2a3140; border-radius: 6px; padding: 4px 6px;
+    }
+    .anim-controls button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #bake-progress {
+      display: none; align-items: center; gap: 10px; margin-top: 8px;
+      font-size: 0.8rem; color: var(--muted); width: min(760px, 100%);
+    }
+    #bake-progress .bar {
+      flex: 1; height: 8px; background: #242a36; border-radius: 4px; overflow: hidden;
+    }
+    #bake-progress .fill {
+      height: 100%; width: 0; background: var(--accent, #4f8ff7); transition: width 0.1s linear;
+    }
+    #bake-progress .txt { white-space: nowrap; }
     .anim-status { font-size: 0.82rem; color: var(--muted); margin-left: auto; }
     .btn-link {
       display: inline-block;
@@ -362,6 +408,7 @@
     <div class="mode-tabs">
       <button type="button" class="mode-tab active" data-mode="textures">纹理浏览</button>
       <button type="button" class="mode-tab" data-mode="animations" id="mode-anim-btn">动画预览</button>
+      <button type="button" class="mode-tab" data-mode="fonts" id="mode-font-btn">位图字体</button>
     </div>
     <div class="toolbar" id="toolbar-textures">
       <input type="search" id="search" placeholder="搜索文件名 / 路径…" />
@@ -378,6 +425,9 @@
     <div class="toolbar" id="toolbar-anim" style="display:none">
       <input type="search" id="anim-search" placeholder="搜索 Spine / 序列帧…" />
       <select id="anim-type-filter"><option value="">全部</option><option value="spine">Spine</option><option value="spine-sequence">Spine 序列帧</option><option value="sprite-sequence">Atlas 序列帧</option></select>
+    </div>
+    <div class="toolbar" id="toolbar-font" style="display:none">
+      <input type="search" id="font-search" placeholder="搜索字体名…" />
     </div>
     <div class="stats" id="stats"></div>
   </header>
@@ -410,7 +460,46 @@
           <label>FPS <input type="range" id="anim-fps" min="4" max="30" value="12" /> <span id="anim-fps-val">12</span></label>
           <span id="anim-status" class="anim-status"></span>
         </div>
+        <div class="anim-controls">
+          <button type="button" id="anim-bake-one" disabled>⬇ 当前动画转帧</button>
+          <button type="button" id="anim-bake-all" disabled>⬇ 当前Spine全部动画转帧</button>
+          <button type="button" id="anim-bake-tab" disabled>⬇ 全部Spine转帧</button>
+          <label>导出 FPS <input type="number" id="bake-fps" min="1" max="60" value="30" /></label>
+          <label>缩放
+            <select id="bake-scale">
+              <option value="1">1:1 原始</option>
+              <option value="0.5">0.5×</option>
+              <option value="2">2×</option>
+            </select>
+          </label>
+        </div>
+        <div class="anim-controls">
+          <button type="button" id="anim-dl-one" disabled>⬇ 当前Spine资源包</button>
+          <button type="button" id="anim-dl-all" disabled>⬇ 全部Spine资源包</button>
+          <span style="font-size:0.78rem;color:var(--muted)">资源包 = skeleton.json + .atlas + 贴图（Spine 原始格式）</span>
+        </div>
+        <div id="bake-progress"><div class="bar"><div class="fill" id="bake-fill"></div></div><span class="txt" id="bake-text"></span></div>
         <dl class="kv" id="anim-meta"></dl>
+      </div>
+    </div>
+    <div id="font-wrap">
+      <div id="font-list"></div>
+      <div id="font-stage">
+        <div class="font-panel">
+          <h3>示例文本渲染</h3>
+          <input type="text" id="font-sample-input" placeholder="输入示例文本（仅含字体内字符）" />
+          <div><canvas id="font-sample-canvas"></canvas></div>
+        </div>
+        <div class="anim-controls" style="margin:0">
+          <button type="button" id="font-dl-one" disabled>⬇ 当前字体 (.fnt + .png)</button>
+          <button type="button" id="font-dl-all" disabled>⬇ 全部字体</button>
+          <span id="font-status" class="anim-status"></span>
+        </div>
+        <div class="font-panel">
+          <h3>字体图集</h3>
+          <img id="font-atlas-img" alt="" />
+        </div>
+        <dl class="kv" id="font-meta"></dl>
       </div>
     </div>
     <aside id="detail">
@@ -421,6 +510,7 @@
   </main>
   <div id="drop-overlay"><div class="box">松开以加载 HAR（自动识别引擎）</div></div>
   <script src="vendor/spine-player-3.8.js"></script>
+  <script src="spine-bake.js"></script>
   <script>
     // Catalog is loaded at runtime from catalog.json (built data directory).
     // The viewer itself carries no HAR data — it starts empty and tabs come
@@ -475,13 +565,18 @@
       extensions = tab.extensions ?? [];
       resourceTypes = tab.resourceTypes ?? [];
       animationManifest = tab.animationManifest ?? [];
+      fontManifest = tab.fontManifest ?? [];
+      currentFont = null;
       selectedId = null;
       stopAnimPlayer();
       updateAnimButtonState();
+      updateFontButtonState();
       rebuildFilters();
       renderTabs();
       if (viewMode === 'animations') {
         ensureAnimationManifest().then(() => renderAnimList());
+      } else if (viewMode === 'fonts') {
+        renderFontList();
       } else applyFilters();
     }
 
@@ -735,6 +830,10 @@
     let animationManifest = [];
     let animFiltered = [];
     let currentAnimItem = null;
+    let fontManifest = [];
+    let fontFiltered = [];
+    let currentFont = null;
+    let fontAtlasImage = null;
     let currentAnimPack = null;
     let animImage = null;
     let animPlaying = false;
@@ -826,12 +925,17 @@
       });
       document.getElementById('grid-wrap').style.display = mode === 'textures' ? 'block' : 'none';
       document.getElementById('anim-wrap').classList.toggle('open', mode === 'animations');
+      document.getElementById('font-wrap').classList.toggle('open', mode === 'fonts');
       document.getElementById('toolbar-textures').style.display = mode === 'textures' ? 'flex' : 'none';
       document.getElementById('toolbar-anim').style.display = mode === 'animations' ? 'flex' : 'none';
+      document.getElementById('toolbar-font').style.display = mode === 'fonts' ? 'flex' : 'none';
       document.getElementById('detail').style.display = mode === 'textures' ? '' : 'none';
       if (mode === 'animations') {
         renderAnimList();
         updateAnimStats();
+      } else if (mode === 'fonts') {
+        stopAnimPlayer();
+        renderFontList();
       } else {
         stopAnimPlayer();
         updateStats();
@@ -862,6 +966,7 @@
       list.innerHTML = '';
       if (!animFiltered.length) {
         list.innerHTML = '<div class="empty">当前 Tab 无可预览动画（需 Cocos HAR + 内嵌纹理）</div>';
+        updateBakeButtons();
         return;
       }
       for (const item of animFiltered) {
@@ -873,6 +978,7 @@
         list.appendChild(el);
       }
       updateAnimStats();
+      updateBakeButtons();
     }
 
     async function selectAnimation(item) {
@@ -900,6 +1006,7 @@
         await setupCanvasPlayer();
       }
       renderAnimMeta();
+      updateBakeButtons();
     }
 
     function useSpineRuntime(pack) {
@@ -1673,6 +1780,513 @@
         `<dt>${k}</dt><dd>${v}</dd>`).join('');
     }
 
+    // ---------- 位图字体（cc.BitmapFont） ----------
+
+    function updateFontButtonState() {
+      const btn = document.getElementById('mode-font-btn');
+      const count = fontManifest.length;
+      btn.disabled = count === 0;
+      btn.title = count === 0
+        ? '当前 Tab 未识别到位图字体（仅 Cocos HAR 支持）'
+        : `识别到 ${count} 个位图字体`;
+      if (count === 0 && viewMode === 'fonts') applyViewMode('textures');
+    }
+
+    function updateFontStats() {
+      document.getElementById('stats').innerHTML =
+        `识别到 <strong>${fontFiltered.length}</strong> / ${fontManifest.length} 个位图字体`;
+    }
+
+    function updateFontDlButtons() {
+      document.getElementById('font-dl-one').disabled = !currentFont;
+      document.getElementById('font-dl-all').disabled = !fontManifest.length;
+    }
+
+    function renderFontList() {
+      const q = document.getElementById('font-search').value.toLowerCase();
+      fontFiltered = fontManifest.filter((f) => !q || f.name.toLowerCase().includes(q));
+      const list = document.getElementById('font-list');
+      list.innerHTML = '';
+      if (!fontFiltered.length) {
+        list.innerHTML = '<div class="empty">当前 Tab 未识别到位图字体</div>';
+      }
+      for (const f of fontFiltered) {
+        const el = document.createElement('div');
+        el.className = 'anim-item' + (currentFont?.id === f.id ? ' active' : '');
+        el.innerHTML =
+          `<div class="title">${f.name}</div>` +
+          `<div class="sub">${f.glyphCount} 字符 · ${f.fontSize ?? '?'}px` +
+          `${f.pngUrl ? '' : ' · 缺贴图'}</div>`;
+        el.onclick = () => selectFont(f);
+        list.appendChild(el);
+      }
+      updateFontStats();
+      updateFontDlButtons();
+      if (!currentFont && fontFiltered.length) selectFont(fontFiltered[0]);
+    }
+
+    function defaultSampleText(font) {
+      const g = font.glyphs ?? '';
+      const digits = [...'0123456789'].filter((c) => g.includes(c)).join('');
+      if (digits.length >= 4) {
+        return digits + [...'$,.x'].filter((c) => g.includes(c)).join('');
+      }
+      return g.slice(0, 16);
+    }
+
+    async function selectFont(font) {
+      currentFont = font;
+      renderFontList();
+      document.getElementById('font-sample-input').value = defaultSampleText(font);
+      fontAtlasImage = null;
+      const img = document.getElementById('font-atlas-img');
+      if (font.pngUrl) {
+        img.src = font.pngUrl;
+        img.style.display = '';
+        try {
+          fontAtlasImage = await loadImageSrc(font.pngUrl);
+        } catch {
+          fontAtlasImage = null;
+        }
+      } else {
+        img.removeAttribute('src');
+        img.style.display = 'none';
+      }
+      renderFontSample();
+      renderFontMeta();
+    }
+
+    function renderFontSample() {
+      const font = currentFont;
+      if (!font) return;
+      const canvas = document.getElementById('font-sample-canvas');
+      const ctx = canvas.getContext('2d');
+      const text = document.getElementById('font-sample-input').value || defaultSampleText(font);
+      const defs = font.fontDefDictionary ?? {};
+      const lineH = font.commonHeight || font.fontSize || 32;
+
+      const glyphs = [];
+      let w = 0;
+      let maxH = lineH;
+      for (const ch of text) {
+        const d = defs[ch.charCodeAt(0)];
+        if (!d) continue;
+        glyphs.push({ d, x: w });
+        w += d.xAdvance ?? d.rect?.width ?? 0;
+        maxH = Math.max(maxH, (d.yOffset ?? 0) + (d.rect?.height ?? 0));
+      }
+      canvas.width = Math.max(60, Math.ceil(w) + 8);
+      canvas.height = Math.ceil(maxH) + 12;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!fontAtlasImage) {
+        ctx.fillStyle = '#8b93a7';
+        ctx.font = '13px sans-serif';
+        ctx.fillText('贴图缺失或未加载，无法渲染示例', 4, 20);
+        return;
+      }
+      for (const g of glyphs) {
+        const r = g.d.rect;
+        if (!r?.width || !r?.height) continue;
+        ctx.drawImage(
+          fontAtlasImage,
+          r.x, r.y, r.width, r.height,
+          4 + g.x + (g.d.xOffset ?? 0), 6 + (g.d.yOffset ?? 0), r.width, r.height,
+        );
+      }
+    }
+
+    function renderFontMeta() {
+      const f = currentFont;
+      if (!f) return;
+      const rows = [
+        ['名称', f.name],
+        ['字号 / 行高', `${f.fontSize ?? '?'} / ${f.commonHeight ?? '?'}`],
+        ['字符数', String(f.glyphCount)],
+        ['字符集', f.glyphs || '-'],
+        ['图集尺寸', `${f.atlasWidth}×${f.atlasHeight}`],
+        ['贴图', f.textureFileName ?? (f.pngUrl ? f.pngUrl.split('/').pop() : '未匹配到（HAR 未抓到或识别失败）')],
+        ['Import JSON', `<a href="${f.importUrl}" target="_blank" rel="noopener">${f.importUrl.split('/').slice(-3).join('/')}</a>`],
+        ['导出文件', `${f.id}.fnt${f.pngUrl ? ` + ${f.id}.png` : ''}（标准 BMFont 格式）`],
+      ];
+      document.getElementById('font-meta').innerHTML =
+        rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    }
+
+    async function downloadFonts(all) {
+      const fonts = all ? fontManifest : [currentFont].filter(Boolean);
+      if (!fonts.length) return;
+      const status = document.getElementById('font-status');
+      try {
+        status.textContent = '打包中…';
+        const entries = [];
+        const skipped = [];
+        for (const f of fonts) {
+          const dir = all ? `${f.id}/` : '';
+          entries.push({ name: `${dir}${f.id}.fnt`, data: await fetchBytes(f.fntUrl) });
+          if (f.pngUrl) {
+            const texName = f.pngUrl.split('/').pop();
+            try {
+              entries.push({ name: `${dir}${texName}`, data: await fetchBytes(f.pngUrl) });
+            } catch {
+              skipped.push(texName);
+            }
+          }
+        }
+        if (skipped.length) {
+          entries.push({ name: 'skipped.json', data: new TextEncoder().encode(JSON.stringify(skipped, null, 2)) });
+        }
+        const zipName = all
+          ? `${(activeTab?.id ?? 'fonts').replace(/[^\w.-]+/g, '_')}_bitmap_fonts.zip`
+          : `${fonts[0].id}_font.zip`;
+        downloadBlob(makeZip(entries), zipName);
+        status.textContent = `完成：${fonts.length} 个字体 → ${zipName}`;
+      } catch (err) {
+        console.error('Font download failed', err);
+        status.textContent = `下载失败：${err.message}`;
+      }
+    }
+
+    document.getElementById('font-dl-one').onclick = () => downloadFonts(false);
+    document.getElementById('font-dl-all').onclick = () => downloadFonts(true);
+    document.getElementById('font-search').addEventListener('input', renderFontList);
+    document.getElementById('font-sample-input').addEventListener('input', renderFontSample);
+
+    // ---------- Spine → PNG 序列帧导出（浏览器内烘焙 + zip 下载） ----------
+
+    const CRC_TABLE = (() => {
+      const t = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        t[n] = c;
+      }
+      return t;
+    })();
+
+    function crc32(u8) {
+      let c = 0xffffffff;
+      for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xff] ^ (c >>> 8);
+      return (c ^ 0xffffffff) >>> 0;
+    }
+
+    /** Store-only (no compression — PNGs are already compressed) zip writer. */
+    function makeZip(entries) {
+      const enc = new TextEncoder();
+      const parts = [];
+      const central = [];
+      let offset = 0;
+      for (const e of entries) {
+        const name = enc.encode(e.name);
+        const crc = crc32(e.data);
+        const h = new DataView(new ArrayBuffer(30));
+        h.setUint32(0, 0x04034b50, true);
+        h.setUint16(4, 20, true);
+        h.setUint16(6, 0x0800, true); // UTF-8 names
+        h.setUint16(8, 0, true); // store
+        h.setUint32(14, crc, true);
+        h.setUint32(18, e.data.length, true);
+        h.setUint32(22, e.data.length, true);
+        h.setUint16(26, name.length, true);
+        parts.push(new Uint8Array(h.buffer), name, e.data);
+        central.push({ name, crc, size: e.data.length, offset });
+        offset += 30 + name.length + e.data.length;
+      }
+      let cdSize = 0;
+      for (const c of central) {
+        const h = new DataView(new ArrayBuffer(46));
+        h.setUint32(0, 0x02014b50, true);
+        h.setUint16(4, 20, true);
+        h.setUint16(6, 20, true);
+        h.setUint16(8, 0x0800, true);
+        h.setUint16(10, 0, true);
+        h.setUint32(16, c.crc, true);
+        h.setUint32(20, c.size, true);
+        h.setUint32(24, c.size, true);
+        h.setUint16(28, c.name.length, true);
+        h.setUint32(42, c.offset, true);
+        parts.push(new Uint8Array(h.buffer), c.name);
+        cdSize += 46 + c.name.length;
+      }
+      const eocd = new DataView(new ArrayBuffer(22));
+      eocd.setUint32(0, 0x06054b50, true);
+      eocd.setUint16(8, central.length, true);
+      eocd.setUint16(10, central.length, true);
+      eocd.setUint32(12, cdSize, true);
+      eocd.setUint32(16, offset, true);
+      parts.push(new Uint8Array(eocd.buffer));
+      return new Blob(parts, { type: 'application/zip' });
+    }
+
+    function downloadBlob(blob, filename) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    }
+
+    function showBakeProgress(done, total, label) {
+      const box = document.getElementById('bake-progress');
+      box.style.display = 'flex';
+      document.getElementById('bake-fill').style.width =
+        total ? `${Math.min(100, Math.round((done / total) * 100))}%` : '0%';
+      document.getElementById('bake-text').textContent =
+        total ? `${label ?? ''} ${done}/${total}` : label ?? '';
+    }
+
+    function hideBakeProgress(finalText) {
+      if (finalText) {
+        showBakeProgress(1, 1, finalText);
+        setTimeout(() => { document.getElementById('bake-progress').style.display = 'none'; }, 2500);
+      } else {
+        document.getElementById('bake-progress').style.display = 'none';
+      }
+    }
+
+    const BAKE_BUTTON_IDS = ['anim-bake-one', 'anim-bake-all', 'anim-bake-tab', 'anim-dl-one', 'anim-dl-all'];
+
+    function spineManifestItems() {
+      return animationManifest.filter((a) => String(a.type ?? '').startsWith('spine'));
+    }
+
+    function updateBakeButtons() {
+      if (baking) return;
+      const cur = !!currentAnimPack && useSpineRuntime(currentAnimPack) && animMode === 'spine';
+      const anyTab = spineManifestItems().length > 0;
+      const states = {
+        'anim-bake-one': cur,
+        'anim-bake-all': cur,
+        'anim-dl-one': cur && !!currentAnimPack?.skelUrl,
+        'anim-bake-tab': anyTab,
+        'anim-dl-all': anyTab,
+      };
+      for (const [id, ok] of Object.entries(states)) {
+        const btn = document.getElementById(id);
+        btn.disabled = !ok;
+        btn.title = ok ? '' : '仅 Spine 动画支持';
+      }
+    }
+
+    function setBakeButtonsDisabled(disabled) {
+      for (const id of BAKE_BUTTON_IDS) document.getElementById(id).disabled = disabled;
+    }
+
+    let baking = false;
+    const safeName = (s) => String(s).replace(/[^\w.-]+/g, '_');
+    const padFrame = (i) => String(i).padStart(4, '0');
+
+    async function fetchPackForItem(item) {
+      if (item === currentAnimItem && currentAnimPack) return currentAnimPack;
+      const res = await fetch(item.previewFile);
+      if (!res.ok) throw new Error(`${item.previewFile} ${res.status}`);
+      return await res.json();
+    }
+
+    async function fetchBytes(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${url} ${r.status}`);
+      return new Uint8Array(await r.arrayBuffer());
+    }
+
+    // Hidden iframe hosting the 3.7 runtime for batch bakes (the preview
+    // iframe only holds the currently selected pack).
+    let bake37Frame = null;
+    async function ensureBake37Host() {
+      if (bake37Frame?.contentWindow?.bakeFromUrls) return bake37Frame.contentWindow;
+      await new Promise((resolve, reject) => {
+        bake37Frame = document.createElement('iframe');
+        bake37Frame.style.display = 'none';
+        bake37Frame.src = 'spine37-player.html';
+        bake37Frame.onload = resolve;
+        bake37Frame.onerror = () => reject(new Error('无法加载 3.7 烘焙宿主'));
+        document.body.appendChild(bake37Frame);
+      });
+      if (!bake37Frame.contentWindow?.bakeFromUrls) throw new Error('3.7 烘焙宿主未就绪');
+      return bake37Frame.contentWindow;
+    }
+
+    /** Bake one pack with the runtime that matches its Spine version. */
+    async function bakePack(pack, anims, fps, scale, onProgress) {
+      if (isSpine37(pack)) {
+        if (pack === currentAnimPack && spine37Active && animPlayer37El.contentWindow?.bakeFrames) {
+          return animPlayer37El.contentWindow.bakeFrames({ fps, scale, animations: anims }, onProgress);
+        }
+        const host = await ensureBake37Host();
+        return host.bakeFromUrls(
+          { skelUrl: pack.skelUrl, atlasUrl: pack.atlasUrl, fps, scale, animations: anims },
+          onProgress,
+        );
+      }
+      const { skeletonJson, atlasText, images } = await loadSpineSource(pack);
+      return spineBakeFrames(
+        { skeletonJson: normalizeSkeletonJson(skeletonJson), atlasText, images, fps, scale, animations: anims },
+        onProgress,
+      );
+    }
+
+    /** Append one bake result's frames to zip entries; returns per-anim meta. */
+    async function appendBakeResult(entries, result, baseDir) {
+      const animsMeta = [];
+      for (const a of result.animations) {
+        if (a.error || !a.frames.length) continue;
+        const dir = (baseDir ? baseDir + '/' : '') + safeName(a.name);
+        for (let i = 0; i < a.frames.length; i++) {
+          entries.push({
+            name: `${dir}/frame_${padFrame(i)}.png`,
+            data: new Uint8Array(await a.frames[i].arrayBuffer()),
+          });
+        }
+        const { frames, ...info } = a;
+        animsMeta.push({ ...info, dir });
+      }
+      return animsMeta;
+    }
+
+    function bakeOpts() {
+      return {
+        fps: Math.min(60, Math.max(1, parseInt(document.getElementById('bake-fps').value, 10) || 30)),
+        scale: parseFloat(document.getElementById('bake-scale').value) || 1,
+      };
+    }
+
+    async function runBakeJob(fn) {
+      if (baking) return;
+      baking = true;
+      setBakeButtonsDisabled(true);
+      try {
+        await fn();
+      } catch (err) {
+        console.error('Bake failed', err);
+        hideBakeProgress(`导出失败：${err.message}`);
+      } finally {
+        baking = false;
+        updateBakeButtons();
+      }
+    }
+
+    function bakeCurrentPack(all) {
+      if (!currentAnimPack || animMode !== 'spine') return;
+      const pack = currentAnimPack;
+      const { fps, scale } = bakeOpts();
+      const current = document.getElementById('anim-clip').value;
+      const anims = all ? [] : [current].filter(Boolean); // empty = all animations
+      runBakeJob(async () => {
+        showBakeProgress(0, 0, '加载资源…');
+        const result = await bakePack(pack, anims, fps, scale, showBakeProgress);
+
+        showBakeProgress(0, 0, '打包 zip…');
+        const entries = [];
+        const metaOut = { pack: pack.name, spineVersion: pack.spineVersion ?? null, fps, animations: [] };
+        metaOut.animations = await appendBakeResult(entries, result, '');
+        if (!entries.length) throw new Error('没有可导出的帧（动画为空或资源缺失）');
+        if (result.missingRegions?.length) metaOut.missingRegions = result.missingRegions;
+        entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify(metaOut, null, 2)) });
+
+        const zipName = all || !current
+          ? `${safeName(pack.name)}_frames_${fps}fps.zip`
+          : `${safeName(pack.name)}_${safeName(current)}_${fps}fps.zip`;
+        downloadBlob(makeZip(entries), zipName);
+        const total = metaOut.animations.reduce((s, a) => s + a.frameCount, 0);
+        hideBakeProgress(`完成：${metaOut.animations.length} 个动画 · ${total} 帧 → ${zipName}`);
+      });
+    }
+
+    /** Bake every spine pack in the current tab into one zip. */
+    function bakeAllPacks() {
+      const items = spineManifestItems();
+      if (!items.length) return;
+      const { fps, scale } = bakeOpts();
+      runBakeJob(async () => {
+        const entries = [];
+        const metaOut = { tab: activeTab?.id ?? null, fps, packs: [], skipped: [] };
+        for (let pi = 0; pi < items.length; pi++) {
+          const item = items[pi];
+          const label = `[${pi + 1}/${items.length}] ${item.name}`;
+          try {
+            showBakeProgress(0, 0, `${label} 加载…`);
+            const pack = await fetchPackForItem(item);
+            if (!useSpineRuntime(pack) || !pack.skelUrl) {
+              metaOut.skipped.push({ name: item.name, reason: '无 Spine 导出文件' });
+              continue;
+            }
+            const result = await bakePack(pack, [], fps, scale, (d, t, l) =>
+              showBakeProgress(d, t, `${label} ${l ?? ''}`),
+            );
+            const packMeta = {
+              name: pack.name,
+              spineVersion: pack.spineVersion ?? null,
+              animations: await appendBakeResult(entries, result, safeName(pack.name)),
+            };
+            if (result.missingRegions?.length) packMeta.missingRegions = result.missingRegions;
+            metaOut.packs.push(packMeta);
+          } catch (err) {
+            console.warn('bake pack failed:', item.name, err);
+            metaOut.skipped.push({ name: item.name, reason: err.message });
+          }
+        }
+        if (!entries.length) throw new Error('没有可导出的帧');
+        entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify(metaOut, null, 2)) });
+        showBakeProgress(0, 0, '打包 zip…');
+        const zipName = `${safeName(activeTab?.id ?? 'spine')}_all_frames_${fps}fps.zip`;
+        downloadBlob(makeZip(entries), zipName);
+        const totalFrames = metaOut.packs.reduce(
+          (s, p) => s + p.animations.reduce((s2, a) => s2 + a.frameCount, 0), 0,
+        );
+        const skip = metaOut.skipped.length ? ` · 跳过 ${metaOut.skipped.length} 个` : '';
+        hideBakeProgress(`完成：${metaOut.packs.length} 个 Spine · ${totalFrames} 帧${skip} → ${zipName}`);
+      });
+    }
+
+    /** Download the original Spine files (skeleton.json / .atlas / pages). */
+    function downloadSpinePacks(all) {
+      const items = all ? spineManifestItems() : [currentAnimItem].filter(Boolean);
+      if (!items.length) return;
+      runBakeJob(async () => {
+        const entries = [];
+        const skipped = [];
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          showBakeProgress(i, items.length, `下载 ${item.name}`);
+          try {
+            const pack = await fetchPackForItem(item);
+            if (!pack.skelUrl || !pack.atlasUrl) {
+              skipped.push({ name: item.name, reason: '无 Spine 导出文件' });
+              continue;
+            }
+            const dir = all ? safeName(pack.name) + '/' : '';
+            entries.push({ name: `${dir}skeleton.json`, data: await fetchBytes(pack.skelUrl) });
+            entries.push({ name: `${dir}skeleton.atlas`, data: await fetchBytes(pack.atlasUrl) });
+            for (const [page, url] of Object.entries(pack.pageUrls ?? {})) {
+              try {
+                entries.push({ name: `${dir}${page}`, data: await fetchBytes(url) });
+              } catch {
+                skipped.push({ name: `${item.name}/${page}`, reason: '贴图缺失' });
+              }
+            }
+          } catch (err) {
+            skipped.push({ name: item.name, reason: err.message });
+          }
+        }
+        if (!entries.length) throw new Error('没有可下载的 Spine 资源');
+        if (skipped.length) {
+          entries.push({ name: 'skipped.json', data: new TextEncoder().encode(JSON.stringify(skipped, null, 2)) });
+        }
+        showBakeProgress(items.length, items.length, '打包 zip…');
+        const zipName = all
+          ? `${safeName(activeTab?.id ?? 'spine')}_spine_packs.zip`
+          : `${safeName(items[0].name)}_spine.zip`;
+        downloadBlob(makeZip(entries), zipName);
+        const skip = skipped.length ? ` · ${skipped.length} 项跳过` : '';
+        hideBakeProgress(`完成：${all ? items.length + ' 个 Spine 资源包' : items[0].name}${skip} → ${zipName}`);
+      });
+    }
+
+    document.getElementById('anim-bake-one').onclick = () => bakeCurrentPack(false);
+    document.getElementById('anim-bake-all').onclick = () => bakeCurrentPack(true);
+    document.getElementById('anim-bake-tab').onclick = () => bakeAllPacks();
+    document.getElementById('anim-dl-one').onclick = () => downloadSpinePacks(false);
+    document.getElementById('anim-dl-all').onclick = () => downloadSpinePacks(true);
+
     document.getElementById('anim-play').onclick = startAnimPlayer;
     document.getElementById('anim-pause').onclick = pauseAnimPlayer;
     document.getElementById('anim-clip').onchange = () => {
@@ -1700,6 +2314,7 @@
     });
 
     updateAnimButtonState();
+    updateFontButtonState();
 
     ['search', 'cat-filter', 'ext-filter', 'type-filter', 'sort'].forEach((id) => {
       document.getElementById(id).addEventListener('input', applyFilters);

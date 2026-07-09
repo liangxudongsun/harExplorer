@@ -5,7 +5,7 @@
  *   node tools/scripts/build-texture-viewer.mjs <file.har> [--out dir]
  *   node tools/scripts/serve-texture-viewer.mjs [--port 8765]
  */
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'fs';
 import { dirname, join, basename, extname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -247,6 +247,8 @@ writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(catalog, null, 2), '
 writeFileSync(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 // Viewer loads catalog.json at runtime; copy it verbatim for static hosting.
 copyFileSync(join(__dirname, '..', '..', 'web', 'viewer', 'viewer.html'), join(OUT_DIR, 'index.html'));
+const bakeJs = join(__dirname, '..', '..', 'web', 'viewer', 'spine-bake.js');
+if (existsSync(bakeJs)) copyFileSync(bakeJs, join(OUT_DIR, 'spine-bake.js'));
 
 console.log(JSON.stringify({
   ok: true,

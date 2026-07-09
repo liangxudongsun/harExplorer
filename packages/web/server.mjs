@@ -150,7 +150,7 @@ function resolveFile(urlPath) {
   }
   const appFile = join(VIEWER_DIR, rel);
   if (
-    (rel === 'spine37-player.html' || rel.startsWith('vendor/')) &&
+    (rel === 'spine37-player.html' || rel === 'spine-bake.js' || rel.startsWith('vendor/')) &&
     appFile.startsWith(VIEWER_DIR) &&
     existsSync(appFile)
   ) {
