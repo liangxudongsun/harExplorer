@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>HAR Texture Viewer</title>
+  <link rel="stylesheet" href="vendor/spine-player-3.8.css" />
   <style>
     :root {
       --bg: #0f1117;
@@ -299,13 +300,18 @@
       border-radius: 10px;
       border: 1px solid var(--border);
       min-height: 320px;
+      flex-shrink: 0; /* don't let the flex column squash the player */
       display: flex;
       align-items: center;
       justify-content: center;
       position: relative;
+      overflow: hidden;
     }
     #anim-canvas-2d { max-width: 100%; max-height: 420px; image-rendering: auto; }
     #anim-canvas-spine { width: min(720px, 100%); height: 440px; display: block; }
+    #anim-player { width: min(760px, 100%); height: 480px; display: none; }
+    #anim-player .spine-player { width: 100%; height: 100%; }
+    #anim-player-37 { width: min(760px, 100%); height: 480px; display: none; border: 0; }
     .anim-controls {
       display: flex;
       flex-wrap: wrap;
@@ -383,6 +389,8 @@
       <div id="anim-list"></div>
       <div id="anim-stage">
         <div id="anim-canvas-wrap">
+          <div id="anim-player"></div>
+          <iframe id="anim-player-37" title="Spine 3.7 Player"></iframe>
           <canvas id="anim-canvas-spine" style="display:none"></canvas>
           <canvas id="anim-canvas-2d"></canvas>
         </div>
@@ -390,6 +398,14 @@
           <button type="button" id="anim-play">▶ 播放</button>
           <button type="button" id="anim-pause">⏸ 暂停</button>
           <label>动画 <select id="anim-clip"></select></label>
+          <label>缩放
+            <select id="anim-zoom">
+              <option value="fit">适配</option>
+              <option value="1">1:1 原始</option>
+              <option value="0.5">0.5×</option>
+              <option value="2">2×</option>
+            </select>
+          </label>
           <label>序列组 <select id="anim-seq"></select></label>
           <label>FPS <input type="range" id="anim-fps" min="4" max="30" value="12" /> <span id="anim-fps-val">12</span></label>
           <span id="anim-status" class="anim-status"></span>
@@ -404,16 +420,18 @@
     </aside>
   </main>
   <div id="drop-overlay"><div class="box">松开以加载 HAR（自动识别引擎）</div></div>
-  <script src="vendor/spine-webgl.js"></script>
+  <script src="vendor/spine-player-3.8.js"></script>
   <script>
-    const CATALOG = /*__CATALOG__*/;
-    const tabs = CATALOG.tabs ?? [CATALOG];
-    let activeTab = tabs.find((t) => !t.meta?.missing) ?? tabs[0];
-    let textures = activeTab.textures ?? [];
-    let meta = activeTab.meta ?? {};
-    let categories = activeTab.categories ?? [];
-    let extensions = activeTab.extensions ?? [];
-    let resourceTypes = activeTab.resourceTypes ?? [];
+    // Catalog is loaded at runtime from catalog.json (built data directory).
+    // The viewer itself carries no HAR data — it starts empty and tabs come
+    // from the data dir or live uploads.
+    let tabs = [];
+    let activeTab = null;
+    let textures = [];
+    let meta = {};
+    let categories = [];
+    let extensions = [];
+    let resourceTypes = [];
 
     document.getElementById('title').textContent = 'HAR Texture Viewer';
 
@@ -436,13 +454,13 @@
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'tab' +
-          (tab.id === activeTab.id ? ' active' : '') +
+          (tab.id === activeTab?.id ? ' active' : '') +
           (tab.meta?.missing ? ' missing' : '');
         const n = tab.meta?.missing ? 0 : (tab.meta?.total ?? tab.textures?.length ?? 0);
         btn.textContent = `${tab.label} (${n})`;
         btn.onclick = () => {
           if (tab.meta?.missing) return;
-          if (tab.id === activeTab.id) return;
+          if (tab.id === activeTab?.id) return;
           activateTab(tab);
         };
         tabsEl.appendChild(btn);
@@ -714,7 +732,7 @@
 
     // ---- Animation preview ----
     let viewMode = 'textures';
-    let animationManifest = activeTab.animationManifest ?? [];
+    let animationManifest = [];
     let animFiltered = [];
     let currentAnimItem = null;
     let currentAnimPack = null;
@@ -726,12 +744,42 @@
 
     const animCanvasSpine = document.getElementById('anim-canvas-spine');
     const animCanvas2d = document.getElementById('anim-canvas-2d');
+    const animPlayerEl = document.getElementById('anim-player');
+    const animPlayer37El = document.getElementById('anim-player-37');
+    let spine37Active = false;
+    let spine37Ready = null;
+    // 'fit' or a numeric scale factor (1 = original pixel size).
+    let animZoomMode = 'fit';
     let animCtx = null;
     let animMode = 'none';
     let spineRenderer = null;
     let spineInstance = null;
+    let spinePlayerWidget = null;
     let spineRaf = null;
     let spineLastTs = 0;
+
+    // Cocos exports often reference regions living in another blob's atlas.
+    // Returning null (instead of throwing) lets SkeletonJson simply skip the
+    // attachment — this makes both the official SpinePlayer and the fallback
+    // renderer tolerant of missing regions.
+    const spineMissingRegions = new Set();
+    for (const m of ['newRegionAttachment', 'newMeshAttachment']) {
+      const orig = spine.AtlasAttachmentLoader.prototype[m];
+      spine.AtlasAttachmentLoader.prototype[m] = function (skin, name, path) {
+        if (path && !this.atlas.findRegion(path)) {
+          spineMissingRegions.add(path);
+          return null;
+        }
+        return orig.call(this, skin, name, path);
+      };
+    }
+
+    function showAnimSurface(kind) {
+      animPlayerEl.style.display = kind === 'player' ? 'block' : 'none';
+      animPlayer37El.style.display = kind === 'player37' ? 'block' : 'none';
+      animCanvasSpine.style.display = kind === 'canvas' ? 'block' : 'none';
+      animCanvas2d.style.display = kind === '2d' ? 'block' : 'none';
+    }
 
     function updateAnimButtonState() {
       const animBtn = document.getElementById('mode-anim-btn');
@@ -836,22 +884,18 @@
       currentAnimPack = await res.json();
       setupAnimControls();
       if (useSpineRuntime(currentAnimPack)) {
-        animCanvasSpine.style.display = '';
-        animCanvas2d.style.display = 'none';
         animMode = 'spine';
         try {
           await setupSpinePlayer(currentAnimPack);
         } catch (err) {
           console.error('Spine runtime failed', err);
           animMode = 'error';
-          animCanvasSpine.style.display = '';
-          animCanvas2d.style.display = 'none';
+          showAnimSurface('canvas');
           const status = document.getElementById('anim-status');
           if (status) status.textContent = `Spine 加载失败: ${err.message}`;
         }
       } else {
-        animCanvasSpine.style.display = 'none';
-        animCanvas2d.style.display = '';
+        showAnimSurface('2d');
         animMode = 'canvas';
         await setupCanvasPlayer();
       }
@@ -863,9 +907,112 @@
     }
 
     function disposeSpinePlayer() {
+      if (spinePlayerWidget) {
+        try { spinePlayerWidget.stopRendering(); } catch { /* ignore */ }
+        spinePlayerWidget = null;
+      }
+      animPlayerEl.innerHTML = '';
+      spine37Active = false;
+      spine37Ready = null;
+      animPlayer37El.src = 'about:blank';
       spineInstance = null;
       spineRenderer = null;
       spineLastTs = 0;
+    }
+
+    function spine37Send(msg) {
+      animPlayer37El.contentWindow?.postMessage({ type: 'spine37', ...msg }, '*');
+    }
+
+    /**
+     * Spine 3.7 skeletons animate incorrectly on the 3.8 runtime, so they get a
+     * dedicated 3.7 runtime inside an iframe (a second global `spine` can't
+     * coexist with the 3.8 build on this page).
+     */
+    function setupSpine37Player(pack) {
+      const anim =
+        document.getElementById('anim-clip').value ||
+        pack.defaultAnimation ||
+        pack.animationNames?.[0] ||
+        '';
+      const url =
+        `spine37-player.html?skel=${encodeURIComponent(pack.skelUrl)}` +
+        `&atlas=${encodeURIComponent(pack.atlasUrl)}` +
+        (anim ? `&anim=${encodeURIComponent(anim)}` : '');
+
+      return new Promise((resolve, reject) => {
+        spine37Ready = { resolve, reject, pack };
+        spine37Active = true;
+        showAnimSurface('player37');
+        animPlayer37El.src = url;
+        setTimeout(() => {
+          if (spine37Ready?.pack === pack) {
+            spine37Ready = null;
+            reject(new Error('Spine 3.7 播放器加载超时'));
+          }
+        }, 15000);
+      });
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (msg?.type !== 'spine37' || !spine37Ready) return;
+      const { resolve, reject, pack } = spine37Ready;
+      if (msg.event === 'ready') {
+        spine37Ready = null;
+        pack._player = 'spine37';
+        if (animZoomMode !== 'fit') spine37Send({ cmd: 'zoom', mode: animZoomMode });
+        pack._runtimeMissingRegions = msg.missingRegions ?? [];
+        pack._runtimeMissingPages = msg.missingPages ?? [];
+        animPlaying = true;
+        const status = document.getElementById('anim-status');
+        if (status) {
+          const miss = pack._runtimeMissingPages.length ? ` · 缺 ${pack._runtimeMissingPages.length} 张 atlas 页` : '';
+          const missReg = pack._runtimeMissingRegions.length ? ` · 缺 ${pack._runtimeMissingRegions.length} 个 region` : '';
+          status.textContent = `Spine Runtime 3.7（专用）· ${msg.version}${miss}${missReg}`;
+        }
+        renderAnimMeta();
+        resolve();
+      } else if (msg.event === 'error') {
+        spine37Ready = null;
+        reject(new Error(msg.message));
+      }
+    });
+
+    function isSpine37(pack) {
+      return /^3\.7/.test(String(pack?.spineVersion ?? ''));
+    }
+
+    /**
+     * Override the official player's viewport to get a fixed pixel scale.
+     * drawFrame derives camera.zoom from viewport.width / canvas width, so a
+     * viewport of (canvas size / s) centered on the animation renders at s×
+     * (s = 1 → one skeleton unit per CSS pixel, i.e. original size).
+     */
+    function applyOfficialZoom() {
+      const p = spinePlayerWidget;
+      if (!p?.currentViewport) return;
+      const vp = p.currentViewport;
+      if (!p._fitViewport) p._fitViewport = { ...vp };
+      const fit = p._fitViewport;
+      p.previousViewport = null; // skip the viewport transition animation
+      if (animZoomMode === 'fit') {
+        Object.assign(vp, fit);
+        return;
+      }
+      const s = parseFloat(animZoomMode) || 1;
+      const cw = p.canvas.clientWidth || 760;
+      const ch = p.canvas.clientHeight || 480;
+      const cx = fit.x + fit.width / 2;
+      const cy = fit.y + fit.height / 2;
+      vp.width = cw / s;
+      vp.height = ch / s;
+      vp.x = cx - vp.width / 2;
+      vp.y = cy - vp.height / 2;
+      vp.padLeft = 0;
+      vp.padRight = 0;
+      vp.padTop = 0;
+      vp.padBottom = 0;
     }
 
     function loadImageSrc(src) {
@@ -1009,9 +1156,108 @@
       };
     }
 
+    function placeholderPageDataUri(width, height) {
+      return createPlaceholderImage(width, height).toDataURL('image/png');
+    }
+
+    /**
+     * Preferred path: the official Esoteric spine-player 3.8 widget. It handles
+     * PMA, devicePixelRatio, per-animation viewports and ships its own UI
+     * (timeline / speed / animation & skin pickers).
+     */
+    async function setupOfficialSpinePlayer(pack) {
+      const atlasRes = await fetch(pack.atlasUrl);
+      if (!atlasRes.ok) throw new Error(`skeleton.atlas ${atlasRes.status}`);
+      const atlasText = normalizeAtlasText(await atlasRes.text());
+      const dir = pack.atlasUrl.slice(0, pack.atlasUrl.lastIndexOf('/') + 1);
+
+      // Feed the (normalized) atlas via rawDataURIs and remap page images the
+      // player would 404 on to placeholders, so partial HARs still play.
+      const rawDataURIs = {
+        [pack.atlasUrl]: 'data:text/plain;charset=utf-8,' + encodeURIComponent(atlasText),
+      };
+      const missingPages = [];
+      for (const page of parseAtlasPageList(atlasText)) {
+        const expected = `${dir}${page.page}`;
+        const actual = pack.pageUrls?.[page.page];
+        if (!actual) {
+          missingPages.push(page.page);
+          rawDataURIs[expected] = placeholderPageDataUri(page.width, page.height);
+        } else if (actual !== expected) {
+          rawDataURIs[expected] = actual;
+        }
+      }
+      pack._runtimeMissingPages = missingPages;
+
+      spineMissingRegions.clear();
+      await new Promise((resolve, reject) => {
+        spinePlayerWidget = new spine.SpinePlayer(animPlayerEl, {
+          jsonUrl: pack.skelUrl,
+          atlasUrl: pack.atlasUrl,
+          rawDataURIs,
+          animation: pack.defaultAnimation || pack.animationNames?.[0] || undefined,
+          premultipliedAlpha: false,
+          backgroundColor: '#12151c',
+          alpha: false,
+          showControls: true,
+          success: () => resolve(),
+          error: (_widget, msg) => reject(new Error(msg)),
+        });
+      });
+      pack._runtimeMissingRegions = [...spineMissingRegions];
+      pack._player = 'official';
+
+      // Re-apply the zoom override whenever the player recomputes its viewport
+      // (both our select and the player's built-in animation picker end here).
+      const origSetAnimation = spinePlayerWidget.setAnimation.bind(spinePlayerWidget);
+      spinePlayerWidget.setAnimation = (name, loop) => {
+        origSetAnimation(name, loop);
+        spinePlayerWidget._fitViewport = null;
+        applyOfficialZoom();
+      };
+      applyOfficialZoom();
+
+      showAnimSurface('player');
+      spinePlayerWidget.play();
+      animPlaying = true;
+      const status = document.getElementById('anim-status');
+      if (status) {
+        const miss = missingPages.length ? ` · 缺 ${missingPages.length} 张 atlas 页` : '';
+        const missReg = pack._runtimeMissingRegions.length
+          ? ` · 缺 ${pack._runtimeMissingRegions.length} 个 region`
+          : '';
+        status.textContent = `Spine Web Player 3.8（官方）${miss}${missReg}`;
+      }
+    }
+
     async function setupSpinePlayer(pack) {
       disposeSpinePlayer();
+      if (pack.skelUrl && pack.atlasUrl && isSpine37(pack)) {
+        try {
+          await setupSpine37Player(pack);
+          return;
+        } catch (err) {
+          console.warn('Spine 3.7 专用播放器失败，尝试 3.8', err);
+          disposeSpinePlayer();
+        }
+      }
+      if (pack.skelUrl && pack.atlasUrl && window.spine?.SpinePlayer) {
+        try {
+          await setupOfficialSpinePlayer(pack);
+          return;
+        } catch (err) {
+          console.warn('官方 SpinePlayer 加载失败，回退到内置渲染器', err);
+          disposeSpinePlayer();
+        }
+      }
+      await setupSpineFallback(pack);
+    }
+
+    async function setupSpineFallback(pack) {
+      disposeSpinePlayer();
       if (!window.spine?.webgl) throw new Error('Spine 3.8 runtime not loaded');
+      showAnimSurface('canvas');
+      pack._player = 'fallback';
 
       const cw = animCanvasSpine.clientWidth || 640;
       const ch = animCanvasSpine.clientHeight || 480;
@@ -1075,7 +1321,9 @@
       const ch = animCanvasSpine.height;
       spineRenderer.camera.setViewport(cw, ch);
       spineRenderer.camera.position.set(spineInstance.cx, spineInstance.cy, 0);
-      spineRenderer.camera.zoom = Math.max(spineInstance.skW / cw, spineInstance.skH / ch) * 1.15;
+      spineRenderer.camera.zoom = animZoomMode === 'fit'
+        ? Math.max(spineInstance.skW / cw, spineInstance.skH / ch) * 1.15
+        : 1 / (parseFloat(animZoomMode) || 1);
       spineRenderer.camera.update();
     }
 
@@ -1117,7 +1365,19 @@
     }
 
     function spineSetAnimation(name) {
-      if (!spineInstance || !name) return;
+      if (!name) return;
+      if (spine37Active) {
+        spine37Send({ cmd: 'anim', name });
+        animPlaying = true;
+        return;
+      }
+      if (spinePlayerWidget) {
+        spinePlayerWidget.setAnimation(name, true);
+        spinePlayerWidget.play();
+        animPlaying = true;
+        return;
+      }
+      if (!spineInstance) return;
       spineInstance.state.setAnimation(0, name, true);
       animPlaying = true;
       spineLastTs = 0;
@@ -1315,6 +1575,16 @@
 
     function startAnimPlayer() {
       if (animMode === 'spine') {
+        if (spine37Active) {
+          spine37Send({ cmd: 'play' });
+          animPlaying = true;
+          return;
+        }
+        if (spinePlayerWidget) {
+          spinePlayerWidget.play();
+          animPlaying = true;
+          return;
+        }
         if (!spineInstance) return;
         animPlaying = true;
         spineLastTs = 0;
@@ -1334,6 +1604,14 @@
     // canvas keeps repainting (handles resize / stays visible, never black).
     function pauseAnimPlayer() {
       animPlaying = false;
+      if (spine37Active) {
+        spine37Send({ cmd: 'pause' });
+        return;
+      }
+      if (spinePlayerWidget) {
+        spinePlayerWidget.pause();
+        return;
+      }
       if (animMode !== 'spine' && animTimer) {
         clearTimeout(animTimer);
         animTimer = null;
@@ -1342,6 +1620,10 @@
 
     function stopAnimPlayer() {
       animPlaying = false;
+      if (spine37Active) spine37Send({ cmd: 'pause' });
+      if (spinePlayerWidget) {
+        try { spinePlayerWidget.pause(); } catch { /* ignore */ }
+      }
       if (spineRaf) cancelAnimationFrame(spineRaf);
       spineRaf = null;
       spineLastTs = 0;
@@ -1360,7 +1642,11 @@
         ['Atlas 尺寸', p.width && p.height ? `${p.width}×${p.height}` : '-'],
         ['Region 数', String(p.regionCount ?? 0)],
         ['Spine 版本', p.spineVersion ?? '-'],
-        ['播放器', useSpineRuntime(p) ? 'Spine Runtime 3.8 (WebGL)' : 'Canvas 序列帧'],
+        ['播放器', p._player === 'spine37'
+          ? 'Spine Runtime 3.7（专用 iframe）'
+          : p._player === 'official'
+            ? 'Spine Web Player 3.8（官方）'
+            : useSpineRuntime(p) ? 'Spine Runtime 3.8 (WebGL, 内置)' : 'Canvas 序列帧'],
         ['动画列表', (p.animationNames ?? []).join(', ') || '-'],
       ];
       const pageList = Object.values(p.texturePages ?? {});
@@ -1399,6 +1685,12 @@
       drawAnimFrame();
     };
     document.getElementById('anim-seq').onchange = () => { rebuildAnimFrames(); animFrameIdx = 0; drawAnimFrame(); };
+    document.getElementById('anim-zoom').onchange = (e) => {
+      animZoomMode = e.target.value;
+      if (spine37Active) spine37Send({ cmd: 'zoom', mode: animZoomMode });
+      else if (spinePlayerWidget) applyOfficialZoom();
+      // fallback renderer picks up animZoomMode on its next frame via fitSpineCamera
+    };
     document.getElementById('anim-fps').oninput = (e) => {
       document.getElementById('anim-fps-val').textContent = e.target.value;
     };
@@ -1414,10 +1706,27 @@
       document.getElementById(id).addEventListener('change', applyFilters);
     });
 
-    renderTabs();
-    rebuildFilters();
-    applyFilters();
-    if (filtered.length) selectTexture(filtered[0]);
+    (async function boot() {
+      try {
+        const res = await fetch('catalog.json', { cache: 'no-store' });
+        if (res.ok) {
+          const cat = await res.json();
+          tabs = cat.tabs ?? [];
+        }
+      } catch { /* no data dir yet — start empty */ }
+
+      renderTabs();
+      const first = tabs.find((t) => !t.meta?.missing) ?? tabs[0];
+      if (first) {
+        activateTab(first);
+        if (filtered.length) selectTexture(filtered[0]);
+      } else {
+        rebuildFilters();
+        applyFilters();
+        document.getElementById('subtitle').textContent =
+          '暂无数据 — 拖拽 .har 文件到页面，或点击「+ 新 HAR」';
+      }
+    })();
   </script>
 </body>
 </html>

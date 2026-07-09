@@ -31,7 +31,9 @@ const PORT = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : 8765;
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.json': 'application/json',
+  '.atlas': 'text/plain; charset=utf-8',
   '.avif': 'image/avif',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -136,10 +138,34 @@ async function handleUpload(req, res) {
   }
 }
 
+// The viewer app (html / vendor runtimes / 3.7 sub-player) is served from the
+// package source; ROOT is purely a data directory (catalog.json, embedded/,
+// animations/, uploads/) that can be deleted and rebuilt at any time.
+const VIEWER_DIR = join(__dirname, 'viewer');
+
+function resolveFile(urlPath) {
+  const rel = decodeURIComponent(urlPath).replace(/^\//, '');
+  if (urlPath === '/' || urlPath === '/index.html') {
+    return join(VIEWER_DIR, 'viewer.html');
+  }
+  const appFile = join(VIEWER_DIR, rel);
+  if (
+    (rel === 'spine37-player.html' || rel.startsWith('vendor/')) &&
+    appFile.startsWith(VIEWER_DIR) &&
+    existsSync(appFile)
+  ) {
+    return appFile;
+  }
+  const dataFile = join(ROOT, rel);
+  if (dataFile.startsWith(ROOT) && existsSync(dataFile) && !statSync(dataFile).isDirectory()) {
+    return dataFile;
+  }
+  return null;
+}
+
 function serveStatic(req, res) {
-  const path = req.url === '/' ? '/index.html' : req.url.split('?')[0];
-  const file = join(ROOT, decodeURIComponent(path).replace(/^\//, ''));
-  if (!file.startsWith(ROOT) || !existsSync(file) || statSync(file).isDirectory()) {
+  const file = resolveFile(req.url.split('?')[0]);
+  if (!file) {
     res.writeHead(404);
     res.end('Not found');
     return;

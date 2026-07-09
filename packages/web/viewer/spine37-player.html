@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spine 3.7 Player</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #12151c; overflow: hidden; }
+    canvas { width: 100%; height: 100%; display: block; }
+  </style>
+  <script src="vendor/spine-webgl-3.7.js"></script>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <script>
+    // Generic Spine 3.7 sub-player, embedded by viewer.html in an iframe so the
+    // 3.7 runtime's global `spine` never collides with the page's 3.8 build.
+    // Query params: ?skel=<url>&atlas=<url>&anim=<name>
+    // Parent control: postMessage({ type:'spine37', cmd:'play'|'pause'|'anim', name })
+    // Child events:   postMessage({ type:'spine37', event:'ready'|'error', ... })
+    const params = new URLSearchParams(location.search);
+    const skelUrl = params.get('skel');
+    const atlasUrl = params.get('atlas');
+    const startAnim = params.get('anim');
+
+    const canvas = document.getElementById('canvas');
+    let renderer = null;
+    let instance = null;
+    let playing = true;
+    let lastTs = 0;
+    let zoomMode = 'fit'; // 'fit' or numeric scale (1 = original size)
+
+    function report(msg) {
+      parent.postMessage({ type: 'spine37', ...msg }, '*');
+    }
+
+    function normalizeAtlasText(text) {
+      return String(text ?? '').replace(
+        /size:\s*(\d+)\s*,\s*(\d+)\r?\n+\r?\n+(format:)/gi,
+        'size: $1,$2\n$3',
+      );
+    }
+
+    function parseAtlasPages(atlasText) {
+      const pages = [];
+      const lines = String(atlasText ?? '').split(/\r?\n/);
+      for (let i = 0; i < lines.length - 1; i++) {
+        const line = lines[i].trim();
+        if (!/\.(png|jpg|webp)$/i.test(line)) continue;
+        const sm = lines[i + 1]?.trim().match(/^size:\s*(\d+)\s*,\s*(\d+)/i);
+        if (sm) pages.push({ page: line, width: +sm[1], height: +sm[2] });
+      }
+      return pages;
+    }
+
+    /** The 3.7 JSON reader expects skins as an object map, not the 3.8 array. */
+    function skeletonForSpine37(json) {
+      if (!json?.skins || !Array.isArray(json.skins)) return json;
+      const skins = {};
+      for (const skin of json.skins) {
+        skins[skin.name ?? 'default'] = skin.attachments ?? skin;
+      }
+      return { ...json, skins };
+    }
+
+    function loadImage(src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('texture ' + src));
+        img.src = src;
+      });
+    }
+
+    function createPlaceholder(w, h) {
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, w);
+      c.height = Math.max(1, h);
+      return c;
+    }
+
+    function createTolerantLoader(atlas) {
+      const base = new spine.AtlasAttachmentLoader(atlas);
+      const missing = new Set();
+      const wrap = (fn) => (...args) => {
+        const path = args[2] ?? args[1];
+        if (path && !atlas.findRegion(path)) {
+          missing.add(path);
+          return null;
+        }
+        return fn.apply(base, args);
+      };
+      return {
+        newRegionAttachment: wrap(base.newRegionAttachment.bind(base)),
+        newMeshAttachment: wrap(base.newMeshAttachment.bind(base)),
+        newBoundingBoxAttachment: base.newBoundingBoxAttachment.bind(base),
+        newPathAttachment: base.newPathAttachment.bind(base),
+        newPointAttachment: base.newPointAttachment.bind(base),
+        newClippingAttachment: base.newClippingAttachment.bind(base),
+        _missing: missing,
+      };
+    }
+
+    function fitCamera() {
+      if (!instance || !renderer) return;
+      renderer.camera.setViewport(canvas.width, canvas.height);
+      renderer.camera.position.set(instance.cx, instance.cy, 0);
+      // camera.zoom = world units per pixel; 1 → original size, 1/s → s×.
+      renderer.camera.zoom = zoomMode === 'fit'
+        ? Math.max(instance.skW / canvas.width, instance.skH / canvas.height) * 1.15
+        : 1 / (parseFloat(zoomMode) || 1);
+      renderer.camera.update();
+    }
+
+    function drawFrame() {
+      if (!instance || !renderer) return;
+      const gl = renderer.context.gl;
+      renderer.resize(spine.webgl.ResizeMode.Expand);
+      fitCamera();
+      gl.clearColor(0.07, 0.08, 0.11, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      renderer.begin();
+      renderer.drawSkeleton(instance.skeleton, false);
+      renderer.end();
+    }
+
+    function tick(ts) {
+      requestAnimationFrame(tick);
+      if (!instance) return;
+      if (!lastTs) lastTs = ts;
+      const dt = Math.min(0.05, (ts - lastTs) / 1000);
+      lastTs = ts;
+      if (playing) {
+        instance.state.update(dt);
+        instance.state.apply(instance.skeleton);
+        instance.skeleton.updateWorldTransform();
+      }
+      drawFrame();
+    }
+
+    async function boot() {
+      if (!skelUrl || !atlasUrl) throw new Error('缺少 skel/atlas 参数');
+      if (!window.spine?.webgl) throw new Error('Spine 3.7 runtime 未加载');
+
+      const [skelRaw, atlasRaw] = await Promise.all([
+        fetch(skelUrl).then((r) => {
+          if (!r.ok) throw new Error(`skeleton.json ${r.status}`);
+          return r.json();
+        }),
+        fetch(atlasUrl).then((r) => {
+          if (!r.ok) throw new Error(`skeleton.atlas ${r.status}`);
+          return r.text();
+        }),
+      ]);
+
+      const atlasText = normalizeAtlasText(atlasRaw);
+      const base = atlasUrl.slice(0, atlasUrl.lastIndexOf('/') + 1);
+      const images = {};
+      const missingPages = [];
+      for (const page of parseAtlasPages(atlasText)) {
+        try {
+          images[page.page] = await loadImage(base + page.page);
+        } catch {
+          images[page.page] = createPlaceholder(page.width, page.height);
+          missingPages.push(page.page);
+        }
+      }
+
+      canvas.width = canvas.clientWidth || 760;
+      canvas.height = canvas.clientHeight || 480;
+      const gl = canvas.getContext('webgl', { alpha: false, premultipliedAlpha: true });
+      if (!gl) throw new Error('WebGL 不可用');
+      renderer = new spine.webgl.SceneRenderer(canvas, gl, false);
+
+      const atlas = new spine.TextureAtlas(atlasText, (path) => {
+        const img = images[path] ?? createPlaceholder(4, 4);
+        return new spine.webgl.GLTexture(renderer.context, img);
+      });
+      const loader = createTolerantLoader(atlas);
+      const skeletonData = new spine.SkeletonJson(loader).readSkeletonData(skeletonForSpine37(skelRaw));
+      const skeleton = new spine.Skeleton(skeletonData);
+      if (skeletonData.defaultSkin) skeleton.setSkin(skeletonData.defaultSkin);
+      else if (skeletonData.skins?.length) skeleton.setSkin(skeletonData.skins[0]);
+      skeleton.setSlotsToSetupPose();
+      skeleton.setToSetupPose();
+      skeleton.updateWorldTransform();
+
+      const state = new spine.AnimationState(new spine.AnimationStateData(skeletonData));
+      const anims = skeletonData.animations.map((a) => a.name);
+      const def = startAnim && anims.includes(startAnim) ? startAnim : anims[0];
+      if (def) state.setAnimation(0, def, true);
+
+      const offset = new spine.Vector2();
+      const size = new spine.Vector2();
+      skeleton.getBounds(offset, size, []);
+      const skW = size.x > 0 ? size.x : 400;
+      const skH = size.y > 0 ? size.y : 400;
+      instance = {
+        skeleton,
+        state,
+        skW,
+        skH,
+        cx: Number.isFinite(offset.x) ? offset.x + skW / 2 : 0,
+        cy: Number.isFinite(offset.y) ? offset.y + skH / 2 : 0,
+      };
+
+      playing = true;
+      requestAnimationFrame(tick);
+      report({
+        event: 'ready',
+        animations: anims,
+        animation: def ?? null,
+        version: skelRaw.skeleton?.spine ?? '3.7',
+        missingRegions: [...loader._missing],
+        missingPages,
+      });
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (msg?.type !== 'spine37' || !instance) return;
+      if (msg.cmd === 'play') {
+        playing = true;
+      } else if (msg.cmd === 'pause') {
+        playing = false;
+      } else if (msg.cmd === 'anim' && msg.name) {
+        instance.state.setAnimation(0, msg.name, true);
+        playing = true;
+      } else if (msg.cmd === 'zoom') {
+        zoomMode = msg.mode ?? 'fit';
+      }
+    });
+
+    boot().catch((err) => {
+      console.error(err);
+      report({ event: 'error', message: err.message });
+    });
+  </script>
+</body>
+</html>

@@ -7,6 +7,6 @@
     "har-lab": "./src/har-lab.mjs"
   },
   "dependencies": {
-    "@har-explore/core": "workspace:*"
+    "@har-explore/core": "*"
   }
 }

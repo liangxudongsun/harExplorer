@@ -1,12 +1,14 @@
 /**
  * Shared Spine SkeletonData extraction from Cocos Creator import JSON.
- * Supports standalone ([[0,"name",...) and bundled ([[[5,"name",...) formats.
+ * Supports CC2 standalone ([[0,"name",...) and bundled ([[[5,"name",...)
+ * formats, plus CC3 packed instances (,"name","\r\npage.png\r\nsize: ...)
+ * whose atlas text uses \r\n escapes.
  */
 
 import { detectSequenceGroups, parseSpineAtlasText } from './parse-import.mjs';
 
 const SPINE_BLOB_RE =
-  /\[\[+(\d+)?,"([^"\\]+)","\\n([^"\\]+)\\nsize:\s*(\d+)\s*,\s*(\d+)/g;
+  /[\[,](\d+,)?"([^"\\]+)","(?:\\r)?\\n([^"\\]+?)(?:\\r)?\\nsize:\s*(\d+)\s*,\s*(\d+)/g;
 
 function extractJsonObject(text, startIdx) {
   if (startIdx < 0) return null;
@@ -229,7 +231,8 @@ export function extractAllSpineBlobs(text, sourceUrl) {
     const contentStart = m.index + m[0].length;
     const atlasEnd = findAtlasEnd(text, contentStart);
     const atlasChunk = text.slice(contentStart, atlasEnd).replace(/^[\r\n]+/, '');
-    const atlasRaw = `\\n${m[3]}\\nsize: ${m[4]},${m[5]}\\n${atlasChunk}`;
+    // Strip CC3's \r escapes so downstream parsing sees plain \n line breaks.
+    const atlasRaw = `\\n${m[3]}\\nsize: ${m[4]},${m[5]}\\n${atlasChunk}`.replace(/\\r/g, '');
 
     const texArrayStart = text.indexOf('",["', atlasEnd);
     const skSearchFrom = texArrayStart >= 0 ? texArrayStart : atlasEnd;
@@ -274,17 +277,27 @@ export function matchTexturesToAtlasPages(atlasPages, textures, usedUrls = new S
     const dimKey = `${page.width}x${page.height}`;
     let best = null;
     let bestScore = Infinity;
+    let bestUsed = null;
+    let bestUsedScore = Infinity;
 
     for (const tex of textures) {
-      if (!tex.width || !tex.height || localUsed.has(tex.url)) continue;
+      if (!tex.width || !tex.height) continue;
       if (`${tex.width}x${tex.height}` !== dimKey) continue;
       const score = Math.abs(tex.size ?? 0 - 1000000);
-      if (score < bestScore) {
+      if (localUsed.has(tex.url)) {
+        // Skeletons in the same bundle often share atlas pages, so a texture
+        // already claimed by another pack is still a valid (fallback) match.
+        if (score < bestUsedScore) {
+          bestUsedScore = score;
+          bestUsed = tex;
+        }
+      } else if (score < bestScore) {
         bestScore = score;
         best = tex;
       }
     }
 
+    best = best ?? bestUsed;
     if (best) {
       localUsed.add(best.url);
       matched[page.page] = {

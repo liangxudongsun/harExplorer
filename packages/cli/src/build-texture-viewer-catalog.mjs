@@ -38,17 +38,21 @@ const catalog = {
   tabs,
 };
 
-const viewerTemplate = readFileSync(join(__dirname, '..', '..', 'web', 'viewer', 'viewer.html'), 'utf8');
-const html = viewerTemplate.replace('/*__CATALOG__*/', JSON.stringify(catalog));
-
 writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(catalog, null, 2), 'utf8');
-writeFileSync(join(OUT_DIR, 'index.html'), html, 'utf8');
+// The viewer loads catalog.json at runtime, so index.html is a plain copy —
+// this keeps the OUT_DIR self-contained for static hosting.
+cpSync(join(__dirname, '..', '..', 'web', 'viewer', 'viewer.html'), join(OUT_DIR, 'index.html'));
 
 const vendorSrc = join(__dirname, '..', '..', 'web', 'viewer', 'vendor');
 const vendorOut = join(OUT_DIR, 'vendor');
 if (existsSync(vendorSrc)) {
   mkdirSync(vendorOut, { recursive: true });
   cpSync(vendorSrc, vendorOut, { recursive: true });
+}
+// Standalone Spine 3.7 sub-player, embedded by the viewer in an iframe.
+const player37 = join(__dirname, '..', '..', 'web', 'viewer', 'spine37-player.html');
+if (existsSync(player37)) {
+  cpSync(player37, join(OUT_DIR, 'spine37-player.html'));
 }
 
 console.log(JSON.stringify({

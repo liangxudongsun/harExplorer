@@ -231,7 +231,6 @@ const manifest = {
   extensions: [...new Set(textures.map((t) => t.ext))].sort(),
 };
 
-const viewerTemplate = readFileSync(join(__dirname, '..', '..', 'web', 'viewer', 'viewer.html'), 'utf8');
 const catalog = {
   builtAt: new Date().toISOString(),
   tabs: [{
@@ -243,10 +242,11 @@ const catalog = {
     extensions: manifest.extensions,
   }],
 };
-const html = viewerTemplate.replace('/*__CATALOG__*/', JSON.stringify(catalog));
 
-writeFileSync(join(OUT_DIR, 'index.html'), html, 'utf8');
+writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(catalog, null, 2), 'utf8');
 writeFileSync(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+// Viewer loads catalog.json at runtime; copy it verbatim for static hosting.
+copyFileSync(join(__dirname, '..', '..', 'web', 'viewer', 'viewer.html'), join(OUT_DIR, 'index.html'));
 
 console.log(JSON.stringify({
   ok: true,
