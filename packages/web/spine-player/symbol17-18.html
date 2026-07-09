@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Symbol 17/18 · Spine 3.7 Player</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #12141a;
+      color: #e8eaef;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 12px 16px;
+      border-bottom: 1px solid #2a2f3a;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #2d4a3e;
+      color: #8fd4b4;
+    }
+    label { font-size: 12px; color: #9aa3b5; display: flex; align-items: center; gap: 6px; }
+    select, button {
+      background: #1e2330;
+      color: inherit;
+      border: 1px solid #3a4254;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+    button { cursor: pointer; }
+    button:hover { border-color: #5a6478; }
+    #stage-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      min-height: 420px;
+    }
+    canvas {
+      width: min(960px, 100%);
+      height: min(640px, 70vh);
+      background: #0a0b0f;
+      border-radius: 8px;
+      border: 1px solid #2a2f3a;
+    }
+    footer {
+      padding: 8px 16px 14px;
+      font-size: 12px;
+      color: #8b93a7;
+      border-top: 1px solid #2a2f3a;
+    }
+    .err { color: #ff8a8a; }
+  </style>
+  <script src="vendor/spine-webgl-3.7.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Symbol 17 / 18</h1>
+    <span class="badge">Spine Runtime 3.7</span>
+    <label>资源
+      <select id="pack-select"></select>
+    </label>
+    <label>动画
+      <select id="anim-select"></select>
+    </label>
+    <button id="btn-play" type="button">播放</button>
+    <button id="btn-pause" type="button">暂停</button>
+    <label><input id="loop-check" type="checkbox" checked> 循环</label>
+  </header>
+  <div id="stage-wrap">
+    <canvas id="canvas" width="960" height="640"></canvas>
+  </div>
+  <footer id="status">加载中…</footer>
+
+  <script>
+    const PACKS = {
+      symbol_17: { label: 'Symbol 17 · 阿努比斯', defaultAnim: 'hit' },
+      symbol_18: { label: 'Symbol 18 · 女神', defaultAnim: 'hit' },
+    };
+    const PACKS_BASE = '/packs';
+
+    const canvas = document.getElementById('canvas');
+    const packSelect = document.getElementById('pack-select');
+    const animSelect = document.getElementById('anim-select');
+    const statusEl = document.getElementById('status');
+    const loopCheck = document.getElementById('loop-check');
+
+    let renderer = null;
+    let instance = null;
+    let playing = true;
+    let lastTs = 0;
+    let rafId = 0;
+    let currentPack = null;
+
+    for (const [id, meta] of Object.entries(PACKS)) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = meta.label;
+      packSelect.appendChild(opt);
+    }
+
+    function setStatus(msg, isErr) {
+      statusEl.textContent = msg;
+      statusEl.className = isErr ? 'err' : '';
+    }
+
+    function parseAtlasPages(atlasText) {
+      const pages = [];
+      const lines = String(atlasText ?? '').split(/\r?\n/);
+      for (let i = 0; i < lines.length - 1; i++) {
+        const line = lines[i].trim();
+        if (!/\.(png|jpg|webp)$/i.test(line)) continue;
+        const sm = lines[i + 1]?.trim().match(/^size:\s*(\d+)\s*,\s*(\d+)/i);
+        if (sm) pages.push({ page: line, width: +sm[1], height: +sm[2] });
+      }
+      return pages;
+    }
+
+    function normalizeAtlasText(text) {
+      return String(text ?? '').replace(
+        /size:\s*(\d+)\s*,\s*(\d+)\r?\n+\r?\n+(format:)/gi,
+        'size: $1,$2\n$3',
+      );
+    }
+
+    /** Spine 3.7 JSON reader expects skins as object, not array. */
+    function skeletonForSpine37(json) {
+      if (!json?.skins || !Array.isArray(json.skins)) return json;
+      const skins = {};
+      for (const skin of json.skins) {
+        const name = skin.name ?? 'default';
+        skins[name] = skin.attachments ?? skin;
+      }
+      return { ...json, skins };
+    }
+
+    function loadImage(src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('纹理加载失败: ' + src));
+        img.src = src;
+      });
+    }
+
+    function createPlaceholder(w, h) {
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, w);
+      c.height = Math.max(1, h);
+      return c;
+    }
+
+    function createTolerantLoader(atlas) {
+      const base = new spine.AtlasAttachmentLoader(atlas);
+      const missing = new Set();
+      const wrap = (fn) => (...args) => {
+        const path = args[2] ?? args[1];
+        if (path && !atlas.findRegion(path)) {
+          missing.add(path);
+          return null;
+        }
+        return fn.apply(base, args);
+      };
+      return {
+        newRegionAttachment: wrap(base.newRegionAttachment.bind(base)),
+        newMeshAttachment: wrap(base.newMeshAttachment.bind(base)),
+        newBoundingBoxAttachment: base.newBoundingBoxAttachment.bind(base),
+        newPathAttachment: base.newPathAttachment.bind(base),
+        newPointAttachment: base.newPointAttachment.bind(base),
+        newClippingAttachment: base.newClippingAttachment.bind(base),
+        _missing: missing,
+      };
+    }
+
+    async function loadPack(name) {
+      const base = `${PACKS_BASE}/${name}`;
+      const [skelRaw, atlasRaw] = await Promise.all([
+        fetch(`${base}/${name}.json`).then((r) => {
+          if (!r.ok) throw new Error(`${name}.json ${r.status}`);
+          return r.json();
+        }),
+        fetch(`${base}/${name}.atlas`).then((r) => {
+          if (!r.ok) throw new Error(`${name}.atlas ${r.status}`);
+          return r.text();
+        }),
+      ]);
+
+      const atlasText = normalizeAtlasText(atlasRaw);
+      const atlasPages = parseAtlasPages(atlasText);
+      const images = {};
+      for (const page of atlasPages) {
+        try {
+          images[page.page] = await loadImage(`${base}/${page.page}`);
+        } catch {
+          images[page.page] = createPlaceholder(page.width, page.height);
+        }
+      }
+
+      if (!window.spine?.webgl) throw new Error('Spine 3.7 runtime 未加载');
+
+      const gl = canvas.getContext('webgl', { alpha: false, premultipliedAlpha: true });
+      if (!gl) throw new Error('WebGL 不可用');
+
+      if (!renderer) {
+        renderer = new spine.webgl.SceneRenderer(canvas, gl, false);
+      }
+
+      const atlas = new spine.TextureAtlas(atlasText, (path) => {
+        const img = images[path] ?? createPlaceholder(4, 4);
+        return new spine.webgl.GLTexture(renderer.context, img);
+      });
+
+      const loader = createTolerantLoader(atlas);
+      const skelJson = new spine.SkeletonJson(loader);
+      const skeletonData = skelJson.readSkeletonData(skeletonForSpine37(skelRaw));
+      const skeleton = new spine.Skeleton(skeletonData);
+
+      if (skeletonData.defaultSkin) {
+        skeleton.setSkin(skeletonData.defaultSkin);
+      } else {
+        skeleton.setSkinByName('default');
+      }
+      skeleton.setSlotsToSetupPose();
+      skeleton.setToSetupPose();
+      skeleton.updateWorldTransform();
+
+      const state = new spine.AnimationState(new spine.AnimationStateData(skeletonData));
+      const anims = skeletonData.animations.map((a) => a.name);
+      const def = PACKS[name]?.defaultAnim && anims.includes(PACKS[name].defaultAnim)
+        ? PACKS[name].defaultAnim
+        : anims[0];
+
+      animSelect.innerHTML = '';
+      for (const a of anims) {
+        const opt = document.createElement('option');
+        opt.value = a;
+        opt.textContent = a;
+        if (a === def) opt.selected = true;
+        animSelect.appendChild(opt);
+      }
+
+      if (def) state.setAnimation(0, def, loopCheck.checked);
+
+      const bounds = new spine.SkeletonBounds();
+      bounds.update(skeleton, true);
+      const skW = bounds.getWidth() || 200;
+      const skH = bounds.getHeight() || 200;
+      const cx = bounds.minX + skW / 2;
+      const cy = bounds.minY + skH / 2;
+      renderer.camera.setViewport(canvas.width, canvas.height);
+      renderer.camera.position.set(cx, cy, 0);
+      renderer.camera.zoom = Math.max(skW / canvas.width, skH / canvas.height) * 1.1;
+      renderer.camera.update();
+
+      const miss = loader._missing.size
+        ? ` · 缺 ${loader._missing.size} 个 region`
+        : '';
+      setStatus(
+        `${name} · Spine ${skelRaw.skeleton?.spine ?? '?'} · ${anims.length} 动画${miss}`,
+      );
+
+      return { skeleton, state, missing: loader._missing };
+    }
+
+    function drawFrame() {
+      if (!instance || !renderer) return;
+      const gl = renderer.context.gl;
+      renderer.resize(spine.webgl.ResizeMode.Expand);
+      gl.clearColor(0.07, 0.08, 0.11, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      renderer.begin();
+      renderer.drawSkeleton(instance.skeleton, false);
+      renderer.end();
+    }
+
+    function tick(ts) {
+      rafId = requestAnimationFrame(tick);
+      if (!instance || !playing) {
+        drawFrame();
+        return;
+      }
+      if (!lastTs) lastTs = ts;
+      const dt = (ts - lastTs) / 1000;
+      lastTs = ts;
+      instance.state.update(dt);
+      instance.state.apply(instance.skeleton);
+      instance.skeleton.updateWorldTransform();
+      drawFrame();
+    }
+
+    async function selectPack(name) {
+      playing = false;
+      cancelAnimationFrame(rafId);
+      setStatus(`加载 ${name}…`);
+      try {
+        instance = await loadPack(name);
+        currentPack = name;
+        playing = true;
+        lastTs = 0;
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(tick);
+      } catch (err) {
+        console.error(err);
+        setStatus('加载失败: ' + err.message, true);
+      }
+    }
+
+    packSelect.onchange = () => selectPack(packSelect.value);
+    animSelect.onchange = () => {
+      if (!instance) return;
+      const anim = animSelect.value;
+      instance.state.setAnimation(0, anim, loopCheck.checked);
+      playing = true;
+    };
+    document.getElementById('btn-play').onclick = () => {
+      if (!instance) return;
+      instance.state.setAnimation(0, animSelect.value, loopCheck.checked);
+      playing = true;
+    };
+    document.getElementById('btn-pause').onclick = () => { playing = false; };
+    loopCheck.onchange = () => {
+      if (!instance) return;
+      instance.state.setAnimation(0, animSelect.value, loopCheck.checked);
+    };
+
+    selectPack('symbol_17');
+  </script>
+</body>
+</html>

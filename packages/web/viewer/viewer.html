@@ -1,0 +1,1423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HAR Texture Viewer</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --panel: #1a1d27;
+      --border: #2a2f3d;
+      --text: #e8eaef;
+      --muted: #8b92a8;
+      --accent: #6c9eff;
+      --accent2: #a78bfa;
+      --ok: #4ade80;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(15, 17, 23, 0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 20px;
+    }
+    h1 { margin: 0 0 6px; font-size: 1.25rem; font-weight: 600; }
+    .meta { color: var(--muted); font-size: 0.85rem; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+      align-items: center;
+    }
+    input[type="search"], select {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+    }
+    input[type="search"] { flex: 1; min-width: 200px; }
+    .stats {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+    .stats strong { color: var(--text); }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .tab {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .tab:hover { color: var(--text); border-color: var(--accent); }
+    .tab.active {
+      color: var(--text);
+      border-color: var(--accent);
+      background: rgba(108, 158, 255, 0.12);
+    }
+    .tab.missing { opacity: 0.45; cursor: not-allowed; }
+    .tabs-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+    .tabs-row .tabs { margin-top: 0; }
+    .tab-add {
+      border-style: dashed;
+      border-color: var(--accent2);
+      color: var(--accent2);
+      background: transparent;
+    }
+    .tab-add:hover { background: rgba(167, 139, 250, 0.12); color: var(--text); }
+    .tab-add.busy { opacity: 0.6; cursor: progress; pointer-events: none; }
+    .upload-hint { font-size: 0.8rem; color: var(--muted); }
+    .upload-hint.error { color: #f87171; }
+    .upload-hint.ok { color: var(--ok); }
+    #drop-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 17, 23, 0.86);
+      backdrop-filter: blur(4px);
+      pointer-events: none;
+    }
+    #drop-overlay.show { display: flex; }
+    #drop-overlay .box {
+      border: 2px dashed var(--accent2);
+      border-radius: 16px;
+      padding: 48px 72px;
+      font-size: 1.3rem;
+      color: var(--text);
+      background: rgba(167, 139, 250, 0.08);
+    }
+    main {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      overflow: hidden;
+    }
+    #grid-wrap {
+      flex: 1;
+      min-width: 0;
+      padding: 16px;
+      overflow-y: auto;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .card:hover, .card.active {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .thumb-wrap {
+      aspect-ratio: 1;
+      background: #12151c;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .thumb-wrap img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      image-rendering: auto;
+    }
+    .thumb-wrap .placeholder {
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-align: center;
+      padding: 8px;
+    }
+    .badge {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      font-size: 0.65rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(0,0,0,0.65);
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+    .badge-type {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      font-size: 0.62rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(0,0,0,0.72);
+      text-transform: uppercase;
+    }
+    .badge.spine { color: #a78bfa; }
+    .badge.seq { color: #4ade80; }
+    .badge.static { color: var(--muted); }
+    .card-body { padding: 8px 10px; }
+    .card-body .name {
+      font-size: 0.78rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 500;
+    }
+    .card-body .sub {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    #detail {
+      width: 360px;
+      flex-shrink: 0;
+      border-left: 1px solid var(--border);
+      background: var(--panel);
+      padding: 16px;
+      overflow-y: auto;
+      display: none;
+    }
+    #detail.open { display: block; }
+    #detail h2 {
+      font-size: 0.95rem;
+      margin: 0 0 12px;
+      word-break: break-all;
+    }
+    #detail .preview {
+      background: #12151c;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+      margin-bottom: 12px;
+      min-height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #detail .preview img {
+      max-width: 100%;
+      max-height: 320px;
+      object-fit: contain;
+    }
+    .kv { font-size: 0.82rem; margin-bottom: 8px; }
+    .kv dt { color: var(--muted); margin-bottom: 2px; }
+    .kv dd { margin: 0; word-break: break-all; }
+    .kv dd a { color: var(--accent); }
+    .empty {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--muted);
+    }
+    .mode-tabs { display: flex; gap: 8px; margin-top: 10px; }
+    .mode-tab {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    .mode-tab.active { color: var(--text); border-color: var(--accent2); background: rgba(167,139,250,0.12); }
+    .mode-tab:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+    #anim-wrap {
+      flex: 1;
+      min-width: 0;
+      display: none;
+      overflow: hidden;
+    }
+    #anim-wrap.open { display: flex; }
+    #anim-list {
+      width: 300px;
+      flex-shrink: 0;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 12px;
+    }
+    .anim-item {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      background: var(--panel);
+    }
+    .anim-item:hover, .anim-item.active { border-color: var(--accent2); }
+    .anim-item .title { font-size: 0.85rem; font-weight: 600; }
+    .anim-item .sub { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+    #anim-stage {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      overflow-y: auto;
+    }
+    #anim-canvas-wrap {
+      background: #12151c;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      min-height: 320px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    #anim-canvas-2d { max-width: 100%; max-height: 420px; image-rendering: auto; }
+    #anim-canvas-spine { width: min(720px, 100%); height: 440px; display: block; }
+    .anim-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 12px 0;
+    }
+    .anim-controls button {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+    }
+    .anim-controls button:hover { border-color: var(--accent); }
+    .anim-controls label { font-size: 0.82rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    .anim-status { font-size: 0.82rem; color: var(--muted); margin-left: auto; }
+    .btn-link {
+      display: inline-block;
+      margin-top: 8px;
+      color: var(--accent);
+      font-size: 0.82rem;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+    }
+    @media (max-width: 900px) {
+      html, body { overflow: auto; height: auto; }
+      body { display: block; }
+      main { flex-direction: column; overflow: visible; }
+      #grid-wrap { overflow: visible; }
+      #detail { width: 100%; border-left: none; border-top: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title">HAR Texture Viewer</h1>
+    <div class="meta" id="subtitle"></div>
+    <div class="tabs-row">
+      <div class="tabs" id="tabs"></div>
+      <button type="button" class="tab tab-add" id="add-har-btn" title="上传一个新的 HAR（自动识别引擎）">＋ 新 HAR</button>
+      <span class="upload-hint" id="upload-hint"></span>
+      <input type="file" id="har-file-input" accept=".har,application/json" style="display:none" />
+    </div>
+    <div class="mode-tabs">
+      <button type="button" class="mode-tab active" data-mode="textures">纹理浏览</button>
+      <button type="button" class="mode-tab" data-mode="animations" id="mode-anim-btn">动画预览</button>
+    </div>
+    <div class="toolbar" id="toolbar-textures">
+      <input type="search" id="search" placeholder="搜索文件名 / 路径…" />
+      <select id="type-filter"><option value="">全部类型</option></select>
+      <select id="cat-filter"><option value="">全部分类</option></select>
+      <select id="ext-filter"><option value="">全部格式</option></select>
+      <select id="sort">
+        <option value="size-desc">体积 ↓</option>
+        <option value="size-asc">体积 ↑</option>
+        <option value="name-asc">名称 A-Z</option>
+        <option value="pixels-desc">像素面积 ↓</option>
+      </select>
+    </div>
+    <div class="toolbar" id="toolbar-anim" style="display:none">
+      <input type="search" id="anim-search" placeholder="搜索 Spine / 序列帧…" />
+      <select id="anim-type-filter"><option value="">全部</option><option value="spine">Spine</option><option value="spine-sequence">Spine 序列帧</option><option value="sprite-sequence">Atlas 序列帧</option></select>
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+  <main>
+    <div id="grid-wrap">
+      <div class="grid" id="grid"></div>
+    </div>
+    <div id="anim-wrap">
+      <div id="anim-list"></div>
+      <div id="anim-stage">
+        <div id="anim-canvas-wrap">
+          <canvas id="anim-canvas-spine" style="display:none"></canvas>
+          <canvas id="anim-canvas-2d"></canvas>
+        </div>
+        <div class="anim-controls">
+          <button type="button" id="anim-play">▶ 播放</button>
+          <button type="button" id="anim-pause">⏸ 暂停</button>
+          <label>动画 <select id="anim-clip"></select></label>
+          <label>序列组 <select id="anim-seq"></select></label>
+          <label>FPS <input type="range" id="anim-fps" min="4" max="30" value="12" /> <span id="anim-fps-val">12</span></label>
+          <span id="anim-status" class="anim-status"></span>
+        </div>
+        <dl class="kv" id="anim-meta"></dl>
+      </div>
+    </div>
+    <aside id="detail">
+      <h2 id="d-name"></h2>
+      <div class="preview"><img id="d-img" alt="" /></div>
+      <dl class="kv" id="d-meta"></dl>
+    </aside>
+  </main>
+  <div id="drop-overlay"><div class="box">松开以加载 HAR（自动识别引擎）</div></div>
+  <script src="vendor/spine-webgl.js"></script>
+  <script>
+    const CATALOG = /*__CATALOG__*/;
+    const tabs = CATALOG.tabs ?? [CATALOG];
+    let activeTab = tabs.find((t) => !t.meta?.missing) ?? tabs[0];
+    let textures = activeTab.textures ?? [];
+    let meta = activeTab.meta ?? {};
+    let categories = activeTab.categories ?? [];
+    let extensions = activeTab.extensions ?? [];
+    let resourceTypes = activeTab.resourceTypes ?? [];
+
+    document.getElementById('title').textContent = 'HAR Texture Viewer';
+
+    const catEl = document.getElementById('cat-filter');
+    const extEl = document.getElementById('ext-filter');
+    const typeEl = document.getElementById('type-filter');
+    const tabsEl = document.getElementById('tabs');
+
+    const TYPE_LABELS = {
+      spine: 'Spine',
+      'spine-sequence': 'Spine 序列帧',
+      'sprite-atlas': 'Sprite Atlas',
+      'sprite-sequence': '序列帧 Atlas',
+      static: '静态图',
+    };
+
+    function renderTabs() {
+      tabsEl.innerHTML = '';
+      for (const tab of tabs) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'tab' +
+          (tab.id === activeTab.id ? ' active' : '') +
+          (tab.meta?.missing ? ' missing' : '');
+        const n = tab.meta?.missing ? 0 : (tab.meta?.total ?? tab.textures?.length ?? 0);
+        btn.textContent = `${tab.label} (${n})`;
+        btn.onclick = () => {
+          if (tab.meta?.missing) return;
+          if (tab.id === activeTab.id) return;
+          activateTab(tab);
+        };
+        tabsEl.appendChild(btn);
+      }
+    }
+
+    function activateTab(tab) {
+      activeTab = tab;
+      textures = tab.textures ?? [];
+      meta = tab.meta ?? {};
+      categories = tab.categories ?? [];
+      extensions = tab.extensions ?? [];
+      resourceTypes = tab.resourceTypes ?? [];
+      animationManifest = tab.animationManifest ?? [];
+      selectedId = null;
+      stopAnimPlayer();
+      updateAnimButtonState();
+      rebuildFilters();
+      renderTabs();
+      if (viewMode === 'animations') {
+        ensureAnimationManifest().then(() => renderAnimList());
+      } else applyFilters();
+    }
+
+    function setUploadHint(msg, cls) {
+      const el = document.getElementById('upload-hint');
+      el.textContent = msg;
+      el.className = 'upload-hint' + (cls ? ` ${cls}` : '');
+    }
+
+    const ENGINE_LABELS = { cocos: 'Cocos Creator', pragmatic: 'Pragmatic Play', slotmill: 'Slotmill' };
+
+    async function uploadHar(file) {
+      if (!file) return;
+      const btn = document.getElementById('add-har-btn');
+      btn.classList.add('busy');
+      setUploadHint(`上传解析中：${file.name}…`);
+      try {
+        const res = await fetch('/upload', {
+          method: 'POST',
+          headers: { 'x-file-name': encodeURIComponent(file.name) },
+          body: file,
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '解析失败');
+        const tab = data.tab;
+        const existing = tabs.findIndex((t) => t.id === tab.id);
+        if (existing >= 0) tabs.splice(existing, 1, tab);
+        else tabs.push(tab);
+        const eng = ENGINE_LABELS[data.detection?.engine] ?? data.detection?.engine ?? '?';
+        const conf = data.detection?.confident ? '' : '（低置信度）';
+        setUploadHint(`已加载 ${tab.label} · 引擎 ${eng}${conf} · ${tab.meta?.total ?? 0} 纹理`, 'ok');
+        activateTab(tab);
+      } catch (err) {
+        setUploadHint(`加载失败：${err.message}`, 'error');
+      } finally {
+        btn.classList.remove('busy');
+      }
+    }
+
+    document.getElementById('add-har-btn').onclick = () =>
+      document.getElementById('har-file-input').click();
+    document.getElementById('har-file-input').onchange = (e) => {
+      const f = e.target.files?.[0];
+      e.target.value = '';
+      uploadHar(f);
+    };
+
+    (() => {
+      const overlay = document.getElementById('drop-overlay');
+      let depth = 0;
+      const isFile = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+      window.addEventListener('dragenter', (e) => {
+        if (!isFile(e)) return;
+        e.preventDefault();
+        depth++;
+        overlay.classList.add('show');
+      });
+      window.addEventListener('dragover', (e) => {
+        if (isFile(e)) e.preventDefault();
+      });
+      window.addEventListener('dragleave', (e) => {
+        if (!isFile(e)) return;
+        depth = Math.max(0, depth - 1);
+        if (!depth) overlay.classList.remove('show');
+      });
+      window.addEventListener('drop', (e) => {
+        if (!isFile(e)) return;
+        e.preventDefault();
+        depth = 0;
+        overlay.classList.remove('show');
+        const f = e.dataTransfer.files?.[0];
+        if (f) uploadHar(f);
+      });
+    })();
+
+    function rebuildFilters() {
+      catEl.innerHTML = '<option value="">全部分类</option>';
+      extEl.innerHTML = '<option value="">全部格式</option>';
+      typeEl.innerHTML = '<option value="">全部类型</option>';
+      categories.forEach((c) => {
+        const o = document.createElement('option');
+        o.value = c; o.textContent = c;
+        catEl.appendChild(o);
+      });
+      extensions.forEach((e) => {
+        const o = document.createElement('option');
+        o.value = e; o.textContent = e;
+        extEl.appendChild(o);
+      });
+      resourceTypes.forEach((rt) => {
+        const o = document.createElement('option');
+        o.value = rt;
+        o.textContent = TYPE_LABELS[rt] ?? rt;
+        typeEl.appendChild(o);
+      });
+      updateSubtitle();
+    }
+
+    function typeBadgeClass(t) {
+      if (t.resourceType?.startsWith('spine')) return 'spine';
+      if (t.resourceType?.includes('sequence')) return 'seq';
+      return 'static';
+    }
+
+    function typeLabel(t) {
+      return TYPE_LABELS[t.resourceType] ?? t.resourceType ?? '';
+    }
+
+    function updateSubtitle() {
+      const parts = [
+        meta.harPath,
+        `${meta.total ?? textures.length} 张纹理`,
+        meta.embedded != null ? `内嵌 ${meta.embedded}` : null,
+        meta.remote != null ? `远程 ${meta.remote}` : null,
+        meta.fromJson != null ? `JSON ${meta.fromJson}` : null,
+        meta.channel ? `channel ${meta.channel}` : null,
+        meta.spineCount != null ? `Spine ${meta.spineCount}` : null,
+        meta.previewCount != null ? `可预览 ${meta.previewCount}` : null,
+      ].filter(Boolean);
+      document.getElementById('subtitle').textContent = parts.join(' · ');
+    }
+
+    let selectedId = null;
+    let filtered = [...textures];
+
+    function pixelArea(t) {
+      return (t.width && t.height) ? t.width * t.height : 0;
+    }
+
+    function applyFilters() {
+      const q = document.getElementById('search').value.toLowerCase();
+      const cat = catEl.value;
+      const ext = extEl.value;
+      const rtype = typeEl.value;
+      const sort = document.getElementById('sort').value;
+
+      filtered = textures.filter((t) => {
+        if (cat && t.category !== cat) return false;
+        if (ext && t.ext !== ext) return false;
+        if (rtype && t.resourceType !== rtype) return false;
+        if (q && !(`${t.fileName} ${t.path} ${t.spineName ?? ''} ${t.sequencePrefix ?? ''}`.toLowerCase().includes(q))) return false;
+        return true;
+      });
+
+      filtered.sort((a, b) => {
+        if (sort === 'size-desc') return b.size - a.size;
+        if (sort === 'size-asc') return a.size - b.size;
+        if (sort === 'name-asc') return a.fileName.localeCompare(b.fileName);
+        if (sort === 'pixels-desc') return pixelArea(b) - pixelArea(a);
+        return 0;
+      });
+
+      renderGrid();
+      updateStats();
+    }
+
+    function updateStats() {
+      const totalBytes = filtered.reduce((s, t) => s + (t.size || 0), 0);
+      const mb = (totalBytes / 1024 / 1024).toFixed(2);
+      document.getElementById('stats').innerHTML =
+        `显示 <strong>${filtered.length}</strong> / ${textures.length} · 合计 <strong>${mb} MB</strong>`;
+    }
+
+    function imgSrc(t) {
+      if (t.srcType === 'embedded') return t.src;
+      return t.src;
+    }
+
+    function renderGrid() {
+      const grid = document.getElementById('grid');
+      grid.innerHTML = '';
+      if (!filtered.length) {
+        grid.innerHTML = '<div class="empty">无匹配纹理</div>';
+        return;
+      }
+      for (const t of filtered) {
+        const card = document.createElement('article');
+        card.className = 'card' + (selectedId === t.id ? ' active' : '');
+        card.dataset.id = t.id;
+
+        const dim = t.width && t.height ? `${t.width}×${t.height}` : '';
+        const rt = typeLabel(t);
+        card.innerHTML = `
+          <div class="thumb-wrap">
+            ${rt ? `<span class="badge-type ${typeBadgeClass(t)}">${rt}</span>` : ''}
+            <span class="badge">${t.ext.replace('.', '')}</span>
+            <img loading="lazy" alt="${t.fileName}" src="${imgSrc(t)}"
+              onerror="this.style.display='none';this.nextElementSibling.style.display='block'" />
+            <div class="placeholder" style="display:none">${t.ext}<br/>加载失败</div>
+          </div>
+          <div class="card-body">
+            <div class="name" title="${t.path}">${t.spineName ?? t.fileName}</div>
+            <div class="sub">${t.sizeFmt}${dim ? ' · ' + dim : ''}${t.sequenceFrameCount ? ' · ' + t.sequenceFrameCount + '帧' : ''}</div>
+          </div>`;
+        card.onclick = () => selectTexture(t);
+        grid.appendChild(card);
+      }
+    }
+
+    function selectTexture(t) {
+      selectedId = t.id;
+      document.getElementById('detail').classList.add('open');
+      document.getElementById('d-name').textContent = t.fileName;
+      const img = document.getElementById('d-img');
+      img.src = imgSrc(t);
+      img.alt = t.fileName;
+
+      const rows = [
+        ['路径', t.path],
+        ['资源类型', typeLabel(t) || t.resourceType || 'static'],
+        ['分类', t.category],
+        ['格式', t.mime || t.ext],
+        ['磁盘体积', t.sizeFmt + (t.size ? ` (${t.size.toLocaleString()} B)` : '')],
+        ['来源', t.srcType === 'embedded' ? 'HAR 内嵌' : t.srcType === 'data' ? 'Data URL' : 'CDN 远程'],
+      ];
+      if (t.spineName) {
+        rows.push(['Spine 名称', t.spineName]);
+        if (animationManifest.some((a) => a.name === t.spineName)) {
+          rows.push(['动画预览', `<button type="button" class="btn-link" id="open-anim-preview">▶ 打开动画预览</button>`]);
+        }
+      }
+      if (t.sequencePrefix) rows.push(['序列帧前缀', `${t.sequencePrefix}_*`]);
+      if (t.sequenceFrameCount) rows.push(['序列帧数', String(t.sequenceFrameCount)]);
+      if (t.atlasRegions) rows.push(['Atlas 区域', `${t.atlasRegions} 个`]);
+      if (t.atlasFrameCount) rows.push(['Atlas 子图', `${t.atlasFrameCount} 张`]);
+      if (t.channel) rows.push(['Channel', t.channel]);
+      if (t.source && t.source !== 'direct') rows.push(['资源包', t.source]);
+      if (t.width && t.height) {
+        rows.push(['Atlas 尺寸', `${t.width} × ${t.height}`]);
+        rows.push(['VRAM 估算 (RGBA)', `${((t.width * t.height * 4) / 1024 / 1024).toFixed(2)} MB`]);
+      }
+      if (t.atlasRegions) rows.push(['Atlas 子图', `${t.atlasRegions} 区域`]);
+      if (t.atlasPath) rows.push(['Atlas 文件', t.atlasPath]);
+      rows.push(['URL', `<a href="${t.url}" target="_blank" rel="noopener">${t.url}</a>`]);
+
+      document.getElementById('d-meta').innerHTML = rows.map(([k, v]) =>
+        `<dt>${k}</dt><dd>${v}</dd>`).join('');
+      const openBtn = document.getElementById('open-anim-preview');
+      if (openBtn && t.spineName) {
+        openBtn.onclick = () => {
+          setViewMode('animations');
+          const item = animationManifest.find((a) => a.name === t.spineName);
+          if (item) selectAnimation(item);
+        };
+      }
+      renderGrid();
+    }
+
+    // ---- Animation preview ----
+    let viewMode = 'textures';
+    let animationManifest = activeTab.animationManifest ?? [];
+    let animFiltered = [];
+    let currentAnimItem = null;
+    let currentAnimPack = null;
+    let animImage = null;
+    let animPlaying = false;
+    let animFrameIdx = 0;
+    let animTimer = null;
+    let animFrames = [];
+
+    const animCanvasSpine = document.getElementById('anim-canvas-spine');
+    const animCanvas2d = document.getElementById('anim-canvas-2d');
+    let animCtx = null;
+    let animMode = 'none';
+    let spineRenderer = null;
+    let spineInstance = null;
+    let spineRaf = null;
+    let spineLastTs = 0;
+
+    function updateAnimButtonState() {
+      const animBtn = document.getElementById('mode-anim-btn');
+      const count = animationManifest.length || meta.previewCount || 0;
+      animBtn.disabled = count === 0;
+      animBtn.title = count === 0
+        ? '当前 Tab 无动画资源（仅 Cocos HAR 支持）'
+        : `可预览 ${animationManifest.length || count} 个`;
+      if (count === 0 && viewMode === 'animations') applyViewMode('textures');
+    }
+
+    async function ensureAnimationManifest() {
+      if (animationManifest.length) return animationManifest;
+      const n = meta.previewCount ?? 0;
+      if (!n || !activeTab?.id) return [];
+      try {
+        const res = await fetch(`animations/${activeTab.id}/manifest.json`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        animationManifest = data.items ?? [];
+        activeTab.animationManifest = animationManifest;
+        updateAnimButtonState();
+      } catch {
+        /* ignore */
+      }
+      return animationManifest;
+    }
+
+    function setViewMode(mode) {
+      if (mode === 'animations') {
+        ensureAnimationManifest().then((items) => {
+          if (!items.length && !(meta.previewCount ?? 0)) return;
+          applyViewMode(mode);
+        });
+        return;
+      }
+      applyViewMode(mode);
+    }
+
+    function applyViewMode(mode) {
+      viewMode = mode;
+      document.querySelectorAll('.mode-tab').forEach((b) => {
+        b.classList.toggle('active', b.dataset.mode === mode);
+      });
+      document.getElementById('grid-wrap').style.display = mode === 'textures' ? 'block' : 'none';
+      document.getElementById('anim-wrap').classList.toggle('open', mode === 'animations');
+      document.getElementById('toolbar-textures').style.display = mode === 'textures' ? 'flex' : 'none';
+      document.getElementById('toolbar-anim').style.display = mode === 'animations' ? 'flex' : 'none';
+      document.getElementById('detail').style.display = mode === 'textures' ? '' : 'none';
+      if (mode === 'animations') {
+        renderAnimList();
+        updateAnimStats();
+      } else {
+        stopAnimPlayer();
+        updateStats();
+      }
+    }
+
+    document.querySelectorAll('.mode-tab').forEach((b) => {
+      b.onclick = () => {
+        if (b.disabled) return;
+        setViewMode(b.dataset.mode);
+      };
+    });
+
+    function updateAnimStats() {
+      document.getElementById('stats').innerHTML =
+        `可预览 <strong>${animFiltered.length}</strong> / ${animationManifest.length} 个动画资源`;
+    }
+
+    function renderAnimList() {
+      const q = document.getElementById('anim-search').value.toLowerCase();
+      const tf = document.getElementById('anim-type-filter').value;
+      animFiltered = animationManifest.filter((a) => {
+        if (tf && a.type !== tf) return false;
+        if (q && !(`${a.name} ${a.type} ${a.bundle}`.toLowerCase().includes(q))) return false;
+        return true;
+      });
+      const list = document.getElementById('anim-list');
+      list.innerHTML = '';
+      if (!animFiltered.length) {
+        list.innerHTML = '<div class="empty">当前 Tab 无可预览动画（需 Cocos HAR + 内嵌纹理）</div>';
+        return;
+      }
+      for (const item of animFiltered) {
+        const el = document.createElement('div');
+        el.className = 'anim-item' + (currentAnimItem?.id === item.id ? ' active' : '');
+        const seq = item.sequenceGroups?.[0];
+        el.innerHTML = `<div class="title">${item.name}</div><div class="sub">${TYPE_LABELS[item.type] ?? item.type} · ${item.regionCount} regions${seq ? ` · ${seq.prefix}_×${seq.count}` : ''}</div>`;
+        el.onclick = () => selectAnimation(item);
+        list.appendChild(el);
+      }
+      updateAnimStats();
+    }
+
+    async function selectAnimation(item) {
+      stopAnimPlayer();
+      disposeSpinePlayer();
+      currentAnimItem = item;
+      renderAnimList();
+      const res = await fetch(item.previewFile);
+      currentAnimPack = await res.json();
+      setupAnimControls();
+      if (useSpineRuntime(currentAnimPack)) {
+        animCanvasSpine.style.display = '';
+        animCanvas2d.style.display = 'none';
+        animMode = 'spine';
+        try {
+          await setupSpinePlayer(currentAnimPack);
+        } catch (err) {
+          console.error('Spine runtime failed', err);
+          animMode = 'error';
+          animCanvasSpine.style.display = '';
+          animCanvas2d.style.display = 'none';
+          const status = document.getElementById('anim-status');
+          if (status) status.textContent = `Spine 加载失败: ${err.message}`;
+        }
+      } else {
+        animCanvasSpine.style.display = 'none';
+        animCanvas2d.style.display = '';
+        animMode = 'canvas';
+        await setupCanvasPlayer();
+      }
+      renderAnimMeta();
+    }
+
+    function useSpineRuntime(pack) {
+      return !!(pack?.skeletonJson && pack?.atlasText && String(pack.type ?? '').startsWith('spine'));
+    }
+
+    function disposeSpinePlayer() {
+      spineInstance = null;
+      spineRenderer = null;
+      spineLastTs = 0;
+    }
+
+    function loadImageSrc(src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = src;
+      });
+    }
+
+    function parseAtlasPageList(atlasText) {
+      const pages = [];
+      const lines = String(atlasText ?? '').split('\n');
+      for (let i = 0; i < lines.length - 1; i++) {
+        const line = lines[i].trim();
+        if (!/\.(png|jpg|webp)$/i.test(line)) continue;
+        const sm = lines[i + 1]?.trim().match(/^size:\s*(\d+)\s*,\s*(\d+)/i);
+        if (sm) pages.push({ page: line, width: +sm[1], height: +sm[2] });
+      }
+      return pages;
+    }
+
+    function createPlaceholderImage(width, height) {
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, width);
+      c.height = Math.max(1, height);
+      return c;
+    }
+
+    async function loadSpineTextures(pack) {
+      const atlasPages = parseAtlasPageList(pack.atlasText);
+      const mapped = pack.texturePages ?? {};
+      const out = {};
+      const missing = [];
+
+      for (const page of atlasPages) {
+        const hit = mapped[page.page];
+        if (hit?.textureSrc) {
+          try {
+            out[page.page] = await loadImageSrc(hit.textureSrc);
+          } catch {
+            out[page.page] = createPlaceholderImage(page.width, page.height);
+            missing.push(page.page);
+          }
+        } else {
+          out[page.page] = createPlaceholderImage(page.width, page.height);
+          missing.push(page.page);
+        }
+      }
+
+      if (!atlasPages.length && pack.textureSrc) {
+        const page = pack.texturePage || 'page.png';
+        out[page] = await loadImageSrc(pack.textureSrc);
+      }
+
+      pack._runtimeMissingPages = missing;
+      return out;
+    }
+
+    function normalizeSkeletonJson(json) {
+      if (!json?.skins || Array.isArray(json.skins)) return json;
+      return {
+        ...json,
+        skins: Object.entries(json.skins).map(([name, data]) =>
+          data?.attachments ? { name, ...data } : { name, attachments: data ?? {} },
+        ),
+      };
+    }
+
+    function normalizeAtlasText(text) {
+      return String(text ?? '').replace(
+        /size:\s*(\d+)\s*,\s*(\d+)\r?\n+\r?\n+(format:)/gi,
+        'size: $1,$2\n$3',
+      );
+    }
+
+    function createTolerantAtlasLoader(atlas) {
+      const base = new spine.AtlasAttachmentLoader(atlas);
+      const missing = new Set();
+      const wrap =
+        (fn) =>
+        (...args) => {
+          const path = args[2] ?? args[1];
+          if (path && !atlas.findRegion(path)) {
+            missing.add(path);
+            return null;
+          }
+          return fn.apply(base, args);
+        };
+      return {
+        newRegionAttachment: wrap(base.newRegionAttachment.bind(base)),
+        newMeshAttachment: wrap(base.newMeshAttachment.bind(base)),
+        newBoundingBoxAttachment: base.newBoundingBoxAttachment.bind(base),
+        newPathAttachment: base.newPathAttachment.bind(base),
+        newPointAttachment: base.newPointAttachment.bind(base),
+        newClippingAttachment: base.newClippingAttachment.bind(base),
+        _missingRegions: missing,
+      };
+    }
+
+    /**
+     * Load a Spine pack the same way a Spine online viewer does: fetch the
+     * exported skeleton.json / skeleton.atlas / page images over HTTP. Falls
+     * back to the legacy in-memory (embedded) data when export URLs are absent.
+     */
+    async function loadSpineSource(pack) {
+      if (pack.skelUrl && pack.atlasUrl) {
+        const [skelRaw, atlasRaw] = await Promise.all([
+          fetch(pack.skelUrl).then((r) => {
+            if (!r.ok) throw new Error(`skeleton.json ${r.status}`);
+            return r.json();
+          }),
+          fetch(pack.atlasUrl).then((r) => {
+            if (!r.ok) throw new Error(`skeleton.atlas ${r.status}`);
+            return r.text();
+          }),
+        ]);
+        const atlasText = normalizeAtlasText(atlasRaw);
+        const base = pack.atlasUrl.slice(0, pack.atlasUrl.lastIndexOf('/') + 1);
+        const images = {};
+        const missing = [];
+        for (const page of parseAtlasPageList(atlasText)) {
+          const url = pack.pageUrls?.[page.page] ?? `${base}${page.page}`;
+          try {
+            images[page.page] = await loadImageSrc(url);
+          } catch {
+            images[page.page] = createPlaceholderImage(page.width, page.height);
+            missing.push(page.page);
+          }
+        }
+        pack._runtimeMissingPages = missing;
+        return { skeletonJson: skelRaw, atlasText, images };
+      }
+
+      const images = await loadSpineTextures(pack);
+      return {
+        skeletonJson: normalizeSkeletonJson(pack.skeletonJson),
+        atlasText: normalizeAtlasText(pack.atlasText),
+        images,
+      };
+    }
+
+    async function setupSpinePlayer(pack) {
+      disposeSpinePlayer();
+      if (!window.spine?.webgl) throw new Error('Spine 3.8 runtime not loaded');
+
+      const cw = animCanvasSpine.clientWidth || 640;
+      const ch = animCanvasSpine.clientHeight || 480;
+      animCanvasSpine.width = cw;
+      animCanvasSpine.height = ch;
+      const gl = animCanvasSpine.getContext('webgl', { alpha: false, premultipliedAlpha: true });
+      if (!gl) throw new Error('WebGL unavailable');
+
+      spineRenderer = new spine.webgl.SceneRenderer(animCanvasSpine, gl, false);
+
+      const { skeletonJson, atlasText, images } = await loadSpineSource(pack);
+      const atlas = new spine.TextureAtlas(atlasText, (path) => {
+        const img = images[path] ?? createPlaceholderImage(4, 4);
+        return new spine.webgl.GLTexture(spineRenderer.context, img);
+      });
+      const atlasLoader = createTolerantAtlasLoader(atlas);
+      const skelReader = new spine.SkeletonJson(atlasLoader);
+      const skeletonData = skelReader.readSkeletonData(skeletonJson);
+      pack._runtimeMissingRegions = [...atlasLoader._missingRegions];
+
+      const skeleton = new spine.Skeleton(skeletonData);
+      if (skeletonData.defaultSkin) {
+        skeleton.setSkin(skeletonData.defaultSkin);
+      } else if (skeletonData.skins?.length) {
+        skeleton.setSkin(skeletonData.skins[0]);
+      }
+      skeleton.setSlotsToSetupPose();
+      skeleton.setToSetupPose();
+      skeleton.updateWorldTransform();
+
+      const state = new spine.AnimationState(new spine.AnimationStateData(skeletonData));
+      const anim =
+        document.getElementById('anim-clip').value ||
+        pack.defaultAnimation ||
+        skeletonData.animations?.[0]?.name;
+      if (anim) state.setAnimation(0, anim, true);
+
+      // getBounds measures actual region/mesh art (SkeletonBounds only covers
+      // bounding-box attachments, which most skins lack → 0 size / NaN camera).
+      const offset = new spine.Vector2();
+      const size = new spine.Vector2();
+      skeleton.getBounds(offset, size, []);
+      const skW = size.x > 0 ? size.x : 400;
+      const skH = size.y > 0 ? size.y : 400;
+      const cx = Number.isFinite(offset.x) ? offset.x + skW / 2 : 0;
+      const cy = Number.isFinite(offset.y) ? offset.y + skH / 2 : 0;
+
+      spineInstance = { skeleton, state, cx, cy, skW, skH };
+
+      // Continuous render loop keeps redrawing even while paused, so a canvas
+      // that was just made visible (clientWidth 0 on first paint) still renders.
+      animPlaying = true;
+      spineLastTs = 0;
+      cancelAnimationFrame(spineRaf);
+      spineRaf = requestAnimationFrame(spineLoop);
+    }
+
+    function fitSpineCamera() {
+      if (!spineInstance || !spineRenderer) return;
+      const cw = animCanvasSpine.width;
+      const ch = animCanvasSpine.height;
+      spineRenderer.camera.setViewport(cw, ch);
+      spineRenderer.camera.position.set(spineInstance.cx, spineInstance.cy, 0);
+      spineRenderer.camera.zoom = Math.max(spineInstance.skW / cw, spineInstance.skH / ch) * 1.15;
+      spineRenderer.camera.update();
+    }
+
+    function drawSpineFrame() {
+      if (!spineInstance || !spineRenderer) return;
+      const gl = spineRenderer.context.gl;
+      spineRenderer.resize(spine.webgl.ResizeMode.Expand);
+      fitSpineCamera();
+      gl.clearColor(0.07, 0.08, 0.11, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      spineRenderer.begin();
+      spineRenderer.drawSkeleton(spineInstance.skeleton, false);
+      spineRenderer.end();
+      const status = document.getElementById('anim-status');
+      if (status) {
+        const miss = currentAnimPack?._runtimeMissingPages?.length
+          ? ` · 缺 ${currentAnimPack._runtimeMissingPages.length} 张 atlas 页`
+          : '';
+        const missReg = currentAnimPack?._runtimeMissingRegions?.length
+          ? ` · 缺 ${currentAnimPack._runtimeMissingRegions.length} 个 region`
+          : '';
+        status.textContent = (animPlaying ? '播放中 · Spine Runtime 3.8' : 'Spine Runtime 3.8 · 暂停') + miss + missReg;
+      }
+    }
+
+    function spineLoop(ts) {
+      if (animMode !== 'spine' || !spineInstance) return;
+      spineRaf = requestAnimationFrame(spineLoop);
+      if (!spineLastTs) spineLastTs = ts;
+      const delta = Math.min(0.05, (ts - spineLastTs) / 1000);
+      spineLastTs = ts;
+      if (animPlaying) {
+        const { state, skeleton } = spineInstance;
+        state.update(delta);
+        state.apply(skeleton);
+        skeleton.updateWorldTransform();
+      }
+      drawSpineFrame();
+    }
+
+    function spineSetAnimation(name) {
+      if (!spineInstance || !name) return;
+      spineInstance.state.setAnimation(0, name, true);
+      animPlaying = true;
+      spineLastTs = 0;
+      cancelAnimationFrame(spineRaf);
+      spineRaf = requestAnimationFrame(spineLoop);
+    }
+
+    async function setupCanvasPlayer() {
+      animCtx = animCtx || animCanvas2d.getContext('2d');
+      await loadAnimImage();
+      rebuildAnimFrames();
+      animFrameIdx = 0;
+      drawAnimFrame();
+    }
+
+    function setupAnimControls() {
+      const clipEl = document.getElementById('anim-clip');
+      const seqEl = document.getElementById('anim-seq');
+      clipEl.innerHTML = '';
+      seqEl.innerHTML = '';
+
+      const anims = currentAnimPack.animationNames ?? [];
+      if (anims.length) {
+        for (const n of anims) {
+          const o = document.createElement('option');
+          o.value = n; o.textContent = n;
+          clipEl.appendChild(o);
+        }
+        clipEl.value = currentAnimPack.defaultAnimation ?? anims[0];
+      } else {
+        const o = document.createElement('option');
+        o.value = ''; o.textContent = '(无 Spine 动画)';
+        clipEl.appendChild(o);
+      }
+
+      const groups = currentAnimPack.sequenceGroups ?? [];
+      if (groups.length) {
+        for (const g of groups) {
+          const o = document.createElement('option');
+          o.value = g.prefix;
+          o.textContent = `${g.prefix}_* (${g.count}帧)`;
+          seqEl.appendChild(o);
+        }
+      } else {
+        const o = document.createElement('option');
+        o.value = ''; o.textContent = '(全部 regions)';
+        seqEl.appendChild(o);
+      }
+    }
+
+    function loadAnimImage() {
+      return new Promise((resolve, reject) => {
+        animImage = new Image();
+        animImage.onload = () => resolve();
+        animImage.onerror = reject;
+        animImage.src = currentAnimPack.textureSrc;
+      });
+    }
+
+    function rebuildAnimFrames() {
+      animFrames = [];
+      const pack = currentAnimPack;
+      const animName = document.getElementById('anim-clip').value;
+      const seqPrefix = document.getElementById('anim-seq').value;
+      const baked = pack.bakedFrames?.[animName];
+      const fps = parseInt(document.getElementById('anim-fps').value, 10) || 12;
+
+      if (baked?.length) {
+        animFrames = baked.map((f) => ({
+          layers: f.layers,
+          duration: f.duration || (1 / fps),
+        }));
+        return;
+      }
+
+      const timelines = pack.timelines ?? {};
+
+      if (animName && timelines[animName]) {
+        const slots = timelines[animName];
+        const slotName = Object.keys(slots).find((s) => slots[s]?.length) ?? Object.keys(slots)[0];
+        const tl = slots[slotName] ?? [];
+        for (let i = 0; i < tl.length; i++) {
+          const cur = tl[i];
+          const next = tl[i + 1];
+          const duration = next ? (next.time - cur.time) : 0.1;
+          animFrames.push({ region: cur.region, duration: Math.max(duration, 0.033) });
+        }
+      }
+
+      if (!animFrames.length && seqPrefix) {
+        const group = (pack.sequenceGroups ?? []).find((g) => g.prefix === seqPrefix);
+        if (group) {
+          for (const name of group.frames) animFrames.push({ region: name, duration: 1 / 12 });
+        }
+      }
+
+      if (!animFrames.length && pack.regions) {
+        const names = Object.keys(pack.regions).slice(0, 60);
+        for (const name of names) animFrames.push({ region: name, duration: 1 / 12 });
+      }
+
+      if (!animFrames.length && pack.frames) {
+        for (const f of pack.frames) {
+          animFrames.push({ frame: f, duration: 1 / 12 });
+        }
+      }
+    }
+
+    function drawRegionLayer(ctx, img, region, cw, ch) {
+      const pad = 8;
+      const dw = cw - pad * 2;
+      const dh = ch - pad * 2;
+      let sw = region.width;
+      let sh = region.height;
+      let sx = region.x;
+      let sy = region.y;
+
+      if (region.rotate) {
+        sw = region.height;
+        sh = region.width;
+      }
+
+      const scale = Math.min(dw / (region.origW || sw), dh / (region.origH || sh), 4);
+      const w = (region.origW || sw) * scale;
+      const h = (region.origH || sh) * scale;
+      const dx = (cw - w) / 2;
+      const dy = (ch - h) / 2;
+
+      if (region.rotate) {
+        ctx.save();
+        ctx.translate(dx + w / 2, dy + h / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.drawImage(img, region.x, region.y, region.height, region.width, -w / 2, -h / 2, w, h);
+        ctx.restore();
+      } else {
+        ctx.drawImage(img, sx, sy, region.width, region.height, dx, dy, w, h);
+      }
+    }
+
+    function drawRegion(ctx, img, region, cw, ch) {
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.fillStyle = '#12151c';
+      ctx.fillRect(0, 0, cw, ch);
+      drawRegionLayer(ctx, img, region, cw, ch);
+    }
+
+    function drawAnimFrame() {
+      if (!currentAnimPack || !animImage || !animFrames.length) return;
+      const f = animFrames[animFrameIdx % animFrames.length];
+      const cw = Math.min(640, Math.max(320, currentAnimPack.width ? currentAnimPack.width / 2 : 400));
+      const ch = Math.min(480, Math.max(240, currentAnimPack.height ? currentAnimPack.height / 2 : 300));
+      animCanvas2d.width = cw;
+      animCanvas2d.height = ch;
+      animCtx.clearRect(0, 0, cw, ch);
+      animCtx.fillStyle = '#12151c';
+      animCtx.fillRect(0, 0, cw, ch);
+
+      if (f.frame) {
+        const fr = f.frame;
+        const scale = Math.min((cw - 16) / fr.width, (ch - 16) / fr.height, 4);
+        const w = fr.width * scale;
+        const h = fr.height * scale;
+        animCtx.drawImage(animImage, fr.x, fr.y, fr.width, fr.height, (cw - w) / 2, (ch - h) / 2, w, h);
+      } else if (f.layers?.length) {
+        for (const layer of f.layers) {
+          const region = currentAnimPack.regions?.[layer.region];
+          if (!region) continue;
+          animCtx.save();
+          animCtx.globalAlpha = layer.alpha ?? 1;
+          if (layer.add) animCtx.globalCompositeOperation = 'lighter';
+          drawRegionLayer(animCtx, animImage, region, cw, ch);
+          animCtx.restore();
+        }
+      } else if (f.region && currentAnimPack.regions?.[f.region]) {
+        drawRegion(animCtx, animImage, currentAnimPack.regions[f.region], cw, ch);
+      }
+
+      const status = document.getElementById('anim-status');
+      if (status) {
+        status.textContent = animPlaying
+          ? `播放中 · 帧 ${(animFrameIdx % animFrames.length) + 1}/${animFrames.length}`
+          : `帧 ${(animFrameIdx % animFrames.length) + 1}/${animFrames.length}`;
+      }
+    }
+
+    function animTick() {
+      if (!animPlaying || !animFrames.length) return;
+      const f = animFrames[animFrameIdx % animFrames.length];
+      const fps = parseInt(document.getElementById('anim-fps').value, 10);
+      const ms = f.duration ? f.duration * 1000 : (1000 / fps);
+      drawAnimFrame();
+      animFrameIdx = (animFrameIdx + 1) % animFrames.length;
+      animTimer = setTimeout(animTick, ms);
+    }
+
+    function startAnimPlayer() {
+      if (animMode === 'spine') {
+        if (!spineInstance) return;
+        animPlaying = true;
+        spineLastTs = 0;
+        cancelAnimationFrame(spineRaf);
+        spineRaf = requestAnimationFrame(spineLoop);
+        return;
+      }
+      if (!animFrames.length) rebuildAnimFrames();
+      if (!animFrames.length) return;
+      animFrameIdx = 0;
+      animPlaying = true;
+      drawAnimFrame();
+      animTimer = setTimeout(animTick, 0);
+    }
+
+    // Pause: freeze the current pose but keep the spine loop alive so the
+    // canvas keeps repainting (handles resize / stays visible, never black).
+    function pauseAnimPlayer() {
+      animPlaying = false;
+      if (animMode !== 'spine' && animTimer) {
+        clearTimeout(animTimer);
+        animTimer = null;
+      }
+    }
+
+    function stopAnimPlayer() {
+      animPlaying = false;
+      if (spineRaf) cancelAnimationFrame(spineRaf);
+      spineRaf = null;
+      spineLastTs = 0;
+      if (animTimer) clearTimeout(animTimer);
+      animTimer = null;
+    }
+
+    function renderAnimMeta() {
+      const p = currentAnimPack;
+      if (!p) return;
+      const rows = [
+        ['名称', p.name],
+        ['类型', TYPE_LABELS[p.type] ?? p.type],
+        ['Import JSON', `<a href="${p.importUrl}" target="_blank" rel="noopener">${p.importUrl.split('/').slice(-3).join('/')}</a>`],
+        ['纹理', p.textureFileName ?? p.textureSrc],
+        ['Atlas 尺寸', p.width && p.height ? `${p.width}×${p.height}` : '-'],
+        ['Region 数', String(p.regionCount ?? 0)],
+        ['Spine 版本', p.spineVersion ?? '-'],
+        ['播放器', useSpineRuntime(p) ? 'Spine Runtime 3.8 (WebGL)' : 'Canvas 序列帧'],
+        ['动画列表', (p.animationNames ?? []).join(', ') || '-'],
+      ];
+      const pageList = Object.values(p.texturePages ?? {});
+      if (pageList.length > 1) {
+        rows.push(['Atlas 页', pageList.map((x) => x.page).join(', ')]);
+      }
+      const missing = p.missingAtlasPages ?? p._runtimeMissingPages?.map((name) => ({ page: name }));
+      if (missing?.length) {
+        rows.push([
+          '缺失纹理',
+          missing.map((m) => `${m.page ?? m} (${m.width ?? '?'}×${m.height ?? '?'})`).join(', ') +
+            ' — HAR 未抓到，火焰/序列特效可能不显示',
+        ]);
+      }
+      if (p.sequenceGroups?.length) {
+        rows.push(['序列帧组', p.sequenceGroups.map((g) => `${g.prefix}×${g.count}`).join(', ')]);
+      }
+      const animName = document.getElementById('anim-clip')?.value;
+      const baked = p.bakedFrames?.[animName];
+      if (baked?.length) {
+        rows.push(['预览帧数', `${baked.length} 帧（含透明度合成）`]);
+      }
+      document.getElementById('anim-meta').innerHTML = rows.map(([k, v]) =>
+        `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    }
+
+    document.getElementById('anim-play').onclick = startAnimPlayer;
+    document.getElementById('anim-pause').onclick = pauseAnimPlayer;
+    document.getElementById('anim-clip').onchange = () => {
+      if (animMode === 'spine') {
+        spineSetAnimation(document.getElementById('anim-clip').value);
+        return;
+      }
+      rebuildAnimFrames();
+      animFrameIdx = 0;
+      drawAnimFrame();
+    };
+    document.getElementById('anim-seq').onchange = () => { rebuildAnimFrames(); animFrameIdx = 0; drawAnimFrame(); };
+    document.getElementById('anim-fps').oninput = (e) => {
+      document.getElementById('anim-fps-val').textContent = e.target.value;
+    };
+    ['anim-search', 'anim-type-filter'].forEach((id) => {
+      document.getElementById(id).addEventListener('input', renderAnimList);
+      document.getElementById(id).addEventListener('change', renderAnimList);
+    });
+
+    updateAnimButtonState();
+
+    ['search', 'cat-filter', 'ext-filter', 'type-filter', 'sort'].forEach((id) => {
+      document.getElementById(id).addEventListener('input', applyFilters);
+      document.getElementById(id).addEventListener('change', applyFilters);
+    });
+
+    renderTabs();
+    rebuildFilters();
+    applyFilters();
+    if (filtered.length) selectTexture(filtered[0]);
+  </script>
+</body>
+</html>

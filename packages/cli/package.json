@@ -1,0 +1,12 @@
+{
+  "name": "@har-explore/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "har-lab": "./src/har-lab.mjs"
+  },
+  "dependencies": {
+    "@har-explore/core": "workspace:*"
+  }
+}

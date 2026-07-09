@@ -1,0 +1,7 @@
+node_modules/
+dist/
+temp/
+uploads/
+*.har
+.DS_Store
+Thumbs.db

@@ -1,0 +1,9 @@
+[
+  {
+    "id": "golden-seth",
+    "label": "Golden Seth (ATG) · Web",
+    "type": "cocos",
+    "har": "samples/play.godeebxp.com.har",
+    "optional": true
+  }
+]

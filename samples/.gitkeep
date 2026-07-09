@@ -1,0 +1,3 @@
+# Place `.har` files here for `npm run build:catalog`.
+# Example: copy from another project
+#   copy D:\workspace\perlab\play.godeebxp.com.har samples\

@@ -1,0 +1,9 @@
+{
+  "name": "@har-explore/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@har-explore/core": "workspace:*"
+  }
+}
