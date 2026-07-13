@@ -1,6 +1,6 @@
 # har-explore
 
-从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体）。支持 **Cocos Creator**、**Pragmatic Play**、**Slotmill** 三种引擎的自动识别。
+从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体、粒子）。支持 **Cocos Creator**、**Pragmatic Play**、**Slotmill** 三种引擎的自动识别。
 
 ## 结构
 
@@ -10,6 +10,8 @@ harExplore/
 │   ├── core/          # 共享分析库（引擎检测、Spine 提取、Tab 构建）
 │   ├── cli/           # 命令行工具
 │   └── web/           # Web 可视化（viewer + 上传 HAR）
+├── cocos-projects/
+│   └── particle-player/  # Cocos 粒子预览壳（Creator 工程放这里）
 ├── samples/           # 放置 .har 样本（不提交大文件）
 └── dist/              # 构建输出（viewer、spine 导出等）
 ```
@@ -39,12 +41,28 @@ npm run spine -- samples/play.godeebxp.com.har --names symbol_08 --layout bare -
 
 npm run font -- samples/play.godeebxp.com.har --name countup_01 --out dist/font-export
 
+npm run particle -- samples/play.godeebxp.com.har --out dist/har-particles
+
 npm run build -- samples/game.har --out dist/texture-viewer
 
 # Spine 转序列帧（透明 PNG，默认 30fps，自动匹配 3.7/3.8 runtime）
 npm run bake -- dist/spine-export/symbol_08 --fps 30 --out dist/frames/symbol_08
 npm run bake -- dist/texture-viewer/animations/golden-seth/f_times --anim loop_2 --scale 2
 ```
+
+## Windows 绿色版（内置 Node，解压即用）
+
+```bash
+# 内置 Node + 预置雷神2、塞特2（约 220MB zip）
+npm run pack
+
+# 含 CLI 烘焙 Playwright 浏览器（体积更大）
+npm run pack:full
+```
+
+产物：`release/harExplore-portable-win-x64.zip`
+
+解压后双击 **启动查看器.bat** → http://127.0.0.1:8765/ ，打开即可看到 **雷神2**、**塞特2** 两个标签页。
 
 ## 从 perlab 迁移
 

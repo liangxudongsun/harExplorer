@@ -1,0 +1,41 @@
+{
+    "importBase": "import",
+    "nativeBase": "native",
+    "name": "main",
+    "deps": [],
+    "uuids": [
+        "ba21476f-2866-4f81-9c4d-6e359316e448",
+        "e1dcd535-e6ed-4f57-acb1-3187a021acd3",
+        "fd8ec536-a354-4a17-9c74-4f3883c378c8"
+    ],
+    "paths": {
+        "e1dcd535-e6ed-4f57-acb1-3187a021acd3": [
+            "db:/assets/scene/ParticlePlayer",
+            "cc.SceneAsset",
+            1
+        ],
+        "fd8ec536-a354-4a17-9c74-4f3883c378c8": [
+            "db:/internal/default_renderpipeline/builtin-forward",
+            "cc.RenderPipeline",
+            1
+        ],
+        "ba21476f-2866-4f81-9c4d-6e359316e448": [
+            "db:/internal/physics/default-physics-material",
+            "cc.PhysicsMaterial",
+            1
+        ]
+    },
+    "scenes": {
+        "db://assets/scene/ParticlePlayer.scene": "e1dcd535-e6ed-4f57-acb1-3187a021acd3"
+    },
+    "packs": {},
+    "versions": {
+        "import": [],
+        "native": []
+    },
+    "redirect": [],
+    "debug": true,
+    "extensionMap": {},
+    "hasPreloadScript": true,
+    "dependencyRelationships": {}
+}

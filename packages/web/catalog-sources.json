@@ -1,9 +1,14 @@
 [
   {
-    "id": "golden-seth",
-    "label": "Golden Seth (ATG) · Web",
+    "id": "power-of-thor2",
+    "label": "雷神2",
     "type": "cocos",
-    "har": "samples/play.godeebxp.com.har",
-    "optional": true
+    "har": "samples/gameweb3.rsg-games.com.har"
+  },
+  {
+    "id": "golden-seth",
+    "label": "塞特2",
+    "type": "cocos",
+    "har": "samples/play.godeebxp.com.har"
   }
 ]

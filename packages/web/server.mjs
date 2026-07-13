@@ -34,6 +34,9 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json',
   '.atlas': 'text/plain; charset=utf-8',
+  '.plist': 'application/xml; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.bin': 'application/octet-stream',
   '.avif': 'image/avif',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -144,15 +147,25 @@ async function handleUpload(req, res) {
 const VIEWER_DIR = join(__dirname, 'viewer');
 
 function resolveFile(urlPath) {
-  const rel = decodeURIComponent(urlPath).replace(/^\//, '');
+  let rel = decodeURIComponent(urlPath).replace(/^\//, '');
   if (urlPath === '/' || urlPath === '/index.html') {
     return join(VIEWER_DIR, 'viewer.html');
   }
+  // Cocos web-mobile shell (and its nested assets)
+  if (rel === 'particle-player' || rel === 'particle-player/') {
+    rel = 'particle-player/index.html';
+  }
   const appFile = join(VIEWER_DIR, rel);
+  const isAppAsset =
+    rel === 'spine37-player.html' ||
+    rel === 'spine-bake.js' ||
+    rel.startsWith('vendor/') ||
+    rel.startsWith('particle-player/');
   if (
-    (rel === 'spine37-player.html' || rel === 'spine-bake.js' || rel.startsWith('vendor/')) &&
+    isAppAsset &&
     appFile.startsWith(VIEWER_DIR) &&
-    existsSync(appFile)
+    existsSync(appFile) &&
+    !statSync(appFile).isDirectory()
   ) {
     return appFile;
   }

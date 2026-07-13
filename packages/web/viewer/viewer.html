@@ -262,19 +262,43 @@
     }
     .mode-tab.active { color: var(--text); border-color: var(--accent2); background: rgba(167,139,250,0.12); }
     .mode-tab:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-    #anim-wrap, #font-wrap {
+    #anim-wrap, #font-wrap, #particle-wrap {
       flex: 1;
       min-width: 0;
       display: none;
       overflow: hidden;
     }
-    #anim-wrap.open, #font-wrap.open { display: flex; }
-    #anim-list, #font-list {
+    #anim-wrap.open, #font-wrap.open, #particle-wrap.open { display: flex; }
+    #anim-list, #font-list, #particle-list {
       width: 300px;
       flex-shrink: 0;
       border-right: 1px solid var(--border);
       overflow-y: auto;
       padding: 12px;
+    }
+    #particle-stage {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 12px 16px;
+      overflow: hidden;
+      gap: 10px;
+    }
+    #particle-frame-wrap {
+      flex: 1;
+      min-height: 0;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0b0d12;
+      overflow: hidden;
+    }
+    #particle-frame {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+      background: #0b0d12;
     }
     #font-stage {
       flex: 1;
@@ -409,6 +433,7 @@
       <button type="button" class="mode-tab active" data-mode="textures">纹理浏览</button>
       <button type="button" class="mode-tab" data-mode="animations" id="mode-anim-btn">动画预览</button>
       <button type="button" class="mode-tab" data-mode="fonts" id="mode-font-btn">位图字体</button>
+      <button type="button" class="mode-tab" data-mode="particles" id="mode-particle-btn">粒子预览</button>
     </div>
     <div class="toolbar" id="toolbar-textures">
       <input type="search" id="search" placeholder="搜索文件名 / 路径…" />
@@ -428,6 +453,9 @@
     </div>
     <div class="toolbar" id="toolbar-font" style="display:none">
       <input type="search" id="font-search" placeholder="搜索字体名…" />
+    </div>
+    <div class="toolbar" id="toolbar-particle" style="display:none">
+      <input type="search" id="particle-search" placeholder="搜索粒子名…" />
     </div>
     <div class="stats" id="stats"></div>
   </header>
@@ -472,6 +500,18 @@
               <option value="2">2×</option>
             </select>
           </label>
+          <label>导出管线
+            <select id="bake-pipeline" title="对比不同精度优化策略">
+              <option value="standard">标准（当前默认）</option>
+              <option value="high-res">高分辨率 2×</option>
+              <option value="max-canvas">超大画布 8192</option>
+              <option value="direct-alpha">直通透明（无双通道）</option>
+              <option value="supersample-2x">超采样 2× 降采样</option>
+              <option value="nearest">最近邻滤镜</option>
+              <option value="precise-alpha">高精度 Alpha 合成</option>
+            </select>
+          </label>
+          <span id="bake-pipeline-hint" style="font-size:0.78rem;color:var(--muted)"></span>
         </div>
         <div class="anim-controls">
           <button type="button" id="anim-dl-one" disabled>⬇ 当前Spine资源包</button>
@@ -500,6 +540,25 @@
           <img id="font-atlas-img" alt="" />
         </div>
         <dl class="kv" id="font-meta"></dl>
+      </div>
+    </div>
+    <div id="particle-wrap">
+      <div id="particle-list"></div>
+      <div id="particle-stage">
+        <div id="particle-frame-wrap">
+          <iframe id="particle-frame" title="Particle Player" allow="autoplay"></iframe>
+        </div>
+        <div class="anim-controls" style="margin:0">
+          <button type="button" id="particle-play">▶ 播放</button>
+          <button type="button" id="particle-pause">⏸ 暂停</button>
+          <button type="button" id="particle-restart">↺ 重播</button>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--muted)">
+            <input type="checkbox" id="particle-follow" checked />
+            鼠标跟随（拖尾）
+          </label>
+          <span id="particle-status" class="anim-status"></span>
+        </div>
+        <dl class="kv" id="particle-meta"></dl>
       </div>
     </div>
     <aside id="detail">
@@ -566,17 +625,23 @@
       resourceTypes = tab.resourceTypes ?? [];
       animationManifest = tab.animationManifest ?? [];
       fontManifest = tab.fontManifest ?? [];
+      particleManifest = tab.particleManifest ?? [];
       currentFont = null;
+      currentParticle = null;
       selectedId = null;
       stopAnimPlayer();
+      stopParticlePlayer();
       updateAnimButtonState();
       updateFontButtonState();
+      updateParticleButtonState();
       rebuildFilters();
       renderTabs();
       if (viewMode === 'animations') {
         ensureAnimationManifest().then(() => renderAnimList());
       } else if (viewMode === 'fonts') {
         renderFontList();
+      } else if (viewMode === 'particles') {
+        ensureParticleManifest().then(() => renderParticleList());
       } else applyFilters();
     }
 
@@ -831,6 +896,10 @@
     let animFiltered = [];
     let currentAnimItem = null;
     let fontManifest = [];
+    let particleManifest = [];
+    let currentParticle = null;
+    let particleReady = false;
+    let particleFiltered = [];
     let fontFiltered = [];
     let currentFont = null;
     let fontAtlasImage = null;
@@ -915,6 +984,13 @@
         });
         return;
       }
+      if (mode === 'particles') {
+        ensureParticleManifest().then((items) => {
+          if (!items.length && !(meta.particleCount ?? 0)) return;
+          applyViewMode(mode);
+        });
+        return;
+      }
       applyViewMode(mode);
     }
 
@@ -926,18 +1002,25 @@
       document.getElementById('grid-wrap').style.display = mode === 'textures' ? 'block' : 'none';
       document.getElementById('anim-wrap').classList.toggle('open', mode === 'animations');
       document.getElementById('font-wrap').classList.toggle('open', mode === 'fonts');
+      document.getElementById('particle-wrap').classList.toggle('open', mode === 'particles');
       document.getElementById('toolbar-textures').style.display = mode === 'textures' ? 'flex' : 'none';
       document.getElementById('toolbar-anim').style.display = mode === 'animations' ? 'flex' : 'none';
       document.getElementById('toolbar-font').style.display = mode === 'fonts' ? 'flex' : 'none';
+      document.getElementById('toolbar-particle').style.display = mode === 'particles' ? 'flex' : 'none';
       document.getElementById('detail').style.display = mode === 'textures' ? '' : 'none';
       if (mode === 'animations') {
         renderAnimList();
         updateAnimStats();
       } else if (mode === 'fonts') {
         stopAnimPlayer();
+        stopParticlePlayer();
         renderFontList();
+      } else if (mode === 'particles') {
+        stopAnimPlayer();
+        renderParticleList();
       } else {
         stopAnimPlayer();
+        stopParticlePlayer();
         updateStats();
       }
     }
@@ -1780,6 +1863,172 @@
         `<dt>${k}</dt><dd>${v}</dd>`).join('');
     }
 
+    // ---------- 粒子（ParticleSystem2D / Cocos iframe） ----------
+
+    function absUrl(rel) {
+      if (!rel) return null;
+      try {
+        return new URL(rel, window.location.href).href;
+      } catch {
+        return rel;
+      }
+    }
+
+    function particleSend(msg) {
+      const frame = document.getElementById('particle-frame');
+      frame?.contentWindow?.postMessage({ type: 'particle', ...msg }, '*');
+    }
+
+    function setParticleStatus(text) {
+      document.getElementById('particle-status').textContent = text || '';
+    }
+
+    function updateParticleButtonState() {
+      const btn = document.getElementById('mode-particle-btn');
+      const count = particleManifest.length || meta.particleCount || 0;
+      btn.disabled = count === 0;
+      btn.title = count === 0
+        ? '当前 Tab 未识别到粒子（仅 Cocos HAR 支持）'
+        : `识别到 ${count} 个粒子`;
+      if (count === 0 && viewMode === 'particles') applyViewMode('textures');
+    }
+
+    async function ensureParticleManifest() {
+      if (particleManifest.length) return particleManifest;
+      const n = meta.particleCount ?? 0;
+      if (!n || !activeTab?.id) return [];
+      try {
+        const res = await fetch(`particles/${activeTab.id}/manifest.json`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        particleManifest = data.items ?? [];
+        activeTab.particleManifest = particleManifest;
+        updateParticleButtonState();
+      } catch {
+        /* ignore */
+      }
+      return particleManifest;
+    }
+
+    function stopParticlePlayer() {
+      particleReady = false;
+      currentParticle = null;
+      const frame = document.getElementById('particle-frame');
+      if (frame) frame.removeAttribute('src');
+      setParticleStatus('');
+    }
+
+    function ensureParticleFrame() {
+      const frame = document.getElementById('particle-frame');
+      if (!frame.src || !frame.src.includes('particle-player')) {
+        particleReady = false;
+        frame.src = 'particle-player/index.html';
+      }
+      return frame;
+    }
+
+    function loadParticleIntoPlayer(item) {
+      if (!item) return;
+      ensureParticleFrame();
+      const follow = document.getElementById('particle-follow')?.checked !== false;
+      const payload = {
+        cmd: 'load',
+        plistUrl: absUrl(item.plistUrl),
+        textureUrl: absUrl(item.textureUrl),
+        params: item.params || undefined,
+        follow,
+      };
+      if (particleReady) {
+        particleSend(payload);
+        setParticleStatus(`已加载 ${item.name}${follow ? ' · 跟随鼠标' : ''}`);
+      } else {
+        // Host will emit ready; then we load
+        framePendingParticle = item;
+        setParticleStatus('等待播放器就绪…');
+      }
+    }
+
+    let framePendingParticle = null;
+
+    window.addEventListener('message', (ev) => {
+      const msg = ev.data;
+      if (!msg || msg.type !== 'particle') return;
+      if (msg.event === 'ready') {
+        particleReady = true;
+        setParticleStatus('就绪');
+        if (framePendingParticle) {
+          const item = framePendingParticle;
+          framePendingParticle = null;
+          loadParticleIntoPlayer(item);
+        } else if (currentParticle) {
+          loadParticleIntoPlayer(currentParticle);
+        }
+      } else if (msg.event === 'loaded') {
+        setParticleStatus(`播放中：${msg.name || currentParticle?.name || ''}`);
+      } else if (msg.event === 'error') {
+        setParticleStatus(`错误：${msg.message || 'unknown'}`);
+      }
+    });
+
+    function renderParticleList() {
+      const q = document.getElementById('particle-search').value.toLowerCase();
+      particleFiltered = particleManifest.filter(
+        (p) => !q || String(p.name).toLowerCase().includes(q) || String(p.id).toLowerCase().includes(q),
+      );
+      const list = document.getElementById('particle-list');
+      list.innerHTML = '';
+      if (!particleFiltered.length) {
+        list.innerHTML = '<div class="empty">当前 Tab 未识别到粒子</div>';
+      }
+      for (const p of particleFiltered) {
+        const el = document.createElement('div');
+        el.className = 'anim-item' + (currentParticle?.id === p.id ? ' active' : '');
+        const bits = [p.kind === 'particleComponent' ? 'Prefab' : 'Plist'];
+        if (p.textureUrl) bits.push('贴图');
+        if (p.plistUrl) bits.push('plist');
+        el.innerHTML =
+          `<div class="title">${p.name}</div>` +
+          `<div class="sub">${bits.join(' · ')}</div>`;
+        el.onclick = () => selectParticle(p);
+        list.appendChild(el);
+      }
+      document.getElementById('stats').innerHTML =
+        `识别到 <strong>${particleFiltered.length}</strong> / ${particleManifest.length} 个粒子`;
+      if (!currentParticle && particleFiltered.length) selectParticle(particleFiltered[0]);
+    }
+
+    function selectParticle(item) {
+      currentParticle = item;
+      renderParticleList();
+      loadParticleIntoPlayer(item);
+      const rows = [
+        ['名称', item.name],
+        ['类型', item.kind],
+        ['来源', item.paramSource || '—'],
+        ['plist', item.plistUrl ? `<a href="${item.plistUrl}" target="_blank">打开</a>` : '—'],
+        ['贴图', item.textureUrl ? `<a href="${item.textureUrl}" target="_blank">打开</a>` : '—'],
+        ['uuid', item.uuid || '—'],
+      ];
+      if (item.note) rows.push(['备注', item.note]);
+      document.getElementById('particle-meta').innerHTML = rows
+        .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+        .join('');
+    }
+
+    document.getElementById('particle-play').onclick = () => particleSend({ cmd: 'play' });
+    document.getElementById('particle-pause').onclick = () => particleSend({ cmd: 'pause' });
+    document.getElementById('particle-restart').onclick = () => particleSend({ cmd: 'restart' });
+    document.getElementById('particle-follow').onchange = (e) => {
+      const enabled = !!e.target.checked;
+      particleSend({ cmd: 'follow', enabled });
+      if (currentParticle) {
+        setParticleStatus(
+          `${currentParticle.name}${enabled ? ' · 跟随鼠标' : ' · 固定位置'}`,
+        );
+      }
+    };
+    document.getElementById('particle-search').addEventListener('input', renderParticleList);
+
     // ---------- 位图字体（cc.BitmapFont） ----------
 
     function updateFontButtonState() {
@@ -2106,20 +2355,22 @@
     }
 
     /** Bake one pack with the runtime that matches its Spine version. */
-    async function bakePack(pack, anims, fps, scale, onProgress) {
+    async function bakePack(pack, anims, bakeSettings, onProgress) {
+      const { fps, scale, pipeline } = bakeSettings;
+      const bakeArgs = { fps, scale, pipeline, animations: anims };
       if (isSpine37(pack)) {
         if (pack === currentAnimPack && spine37Active && animPlayer37El.contentWindow?.bakeFrames) {
-          return animPlayer37El.contentWindow.bakeFrames({ fps, scale, animations: anims }, onProgress);
+          return animPlayer37El.contentWindow.bakeFrames(bakeArgs, onProgress);
         }
         const host = await ensureBake37Host();
         return host.bakeFromUrls(
-          { skelUrl: pack.skelUrl, atlasUrl: pack.atlasUrl, fps, scale, animations: anims },
+          { skelUrl: pack.skelUrl, atlasUrl: pack.atlasUrl, ...bakeArgs },
           onProgress,
         );
       }
       const { skeletonJson, atlasText, images } = await loadSpineSource(pack);
       return spineBakeFrames(
-        { skeletonJson: normalizeSkeletonJson(skeletonJson), atlasText, images, fps, scale, animations: anims },
+        { skeletonJson: normalizeSkeletonJson(skeletonJson), atlasText, images, ...bakeArgs },
         onProgress,
       );
     }
@@ -2146,7 +2397,20 @@
       return {
         fps: Math.min(60, Math.max(1, parseInt(document.getElementById('bake-fps').value, 10) || 30)),
         scale: parseFloat(document.getElementById('bake-scale').value) || 1,
+        pipeline: document.getElementById('bake-pipeline').value || 'standard',
       };
+    }
+
+    function updateBakePipelineHint() {
+      const id = document.getElementById('bake-pipeline').value;
+      const hint = window.BAKE_PIPELINES?.[id]?.hint ?? '';
+      document.getElementById('bake-pipeline-hint').textContent = hint;
+    }
+    document.getElementById('bake-pipeline').addEventListener('change', updateBakePipelineHint);
+    updateBakePipelineHint();
+
+    function bakeZipSuffix(fps, pipeline) {
+      return pipeline && pipeline !== 'standard' ? `_${fps}fps_${pipeline}` : `_${fps}fps`;
     }
 
     async function runBakeJob(fn) {
@@ -2167,24 +2431,32 @@
     function bakeCurrentPack(all) {
       if (!currentAnimPack || animMode !== 'spine') return;
       const pack = currentAnimPack;
-      const { fps, scale } = bakeOpts();
+      const bakeSettings = bakeOpts();
+      const { fps, pipeline } = bakeSettings;
       const current = document.getElementById('anim-clip').value;
       const anims = all ? [] : [current].filter(Boolean); // empty = all animations
       runBakeJob(async () => {
         showBakeProgress(0, 0, '加载资源…');
-        const result = await bakePack(pack, anims, fps, scale, showBakeProgress);
+        const result = await bakePack(pack, anims, bakeSettings, showBakeProgress);
 
         showBakeProgress(0, 0, '打包 zip…');
         const entries = [];
-        const metaOut = { pack: pack.name, spineVersion: pack.spineVersion ?? null, fps, animations: [] };
+        const metaOut = {
+          pack: pack.name,
+          spineVersion: pack.spineVersion ?? null,
+          fps,
+          pipeline: result.pipeline ?? { id: pipeline },
+          animations: [],
+        };
         metaOut.animations = await appendBakeResult(entries, result, '');
         if (!entries.length) throw new Error('没有可导出的帧（动画为空或资源缺失）');
         if (result.missingRegions?.length) metaOut.missingRegions = result.missingRegions;
         entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify(metaOut, null, 2)) });
 
+        const suffix = bakeZipSuffix(fps, pipeline);
         const zipName = all || !current
-          ? `${safeName(pack.name)}_frames_${fps}fps.zip`
-          : `${safeName(pack.name)}_${safeName(current)}_${fps}fps.zip`;
+          ? `${safeName(pack.name)}_frames${suffix}.zip`
+          : `${safeName(pack.name)}_${safeName(current)}${suffix}.zip`;
         downloadBlob(makeZip(entries), zipName);
         const total = metaOut.animations.reduce((s, a) => s + a.frameCount, 0);
         hideBakeProgress(`完成：${metaOut.animations.length} 个动画 · ${total} 帧 → ${zipName}`);
@@ -2195,10 +2467,11 @@
     function bakeAllPacks() {
       const items = spineManifestItems();
       if (!items.length) return;
-      const { fps, scale } = bakeOpts();
+      const bakeSettings = bakeOpts();
+      const { fps, pipeline } = bakeSettings;
       runBakeJob(async () => {
         const entries = [];
-        const metaOut = { tab: activeTab?.id ?? null, fps, packs: [], skipped: [] };
+        const metaOut = { tab: activeTab?.id ?? null, fps, pipeline: { id: pipeline }, packs: [], skipped: [] };
         for (let pi = 0; pi < items.length; pi++) {
           const item = items[pi];
           const label = `[${pi + 1}/${items.length}] ${item.name}`;
@@ -2209,12 +2482,13 @@
               metaOut.skipped.push({ name: item.name, reason: '无 Spine 导出文件' });
               continue;
             }
-            const result = await bakePack(pack, [], fps, scale, (d, t, l) =>
+            const result = await bakePack(pack, [], bakeSettings, (d, t, l) =>
               showBakeProgress(d, t, `${label} ${l ?? ''}`),
             );
             const packMeta = {
               name: pack.name,
               spineVersion: pack.spineVersion ?? null,
+              pipeline: result.pipeline ?? { id: pipeline },
               animations: await appendBakeResult(entries, result, safeName(pack.name)),
             };
             if (result.missingRegions?.length) packMeta.missingRegions = result.missingRegions;
@@ -2227,7 +2501,7 @@
         if (!entries.length) throw new Error('没有可导出的帧');
         entries.push({ name: 'meta.json', data: new TextEncoder().encode(JSON.stringify(metaOut, null, 2)) });
         showBakeProgress(0, 0, '打包 zip…');
-        const zipName = `${safeName(activeTab?.id ?? 'spine')}_all_frames_${fps}fps.zip`;
+        const zipName = `${safeName(activeTab?.id ?? 'spine')}_all_frames${bakeZipSuffix(fps, pipeline)}.zip`;
         downloadBlob(makeZip(entries), zipName);
         const totalFrames = metaOut.packs.reduce(
           (s, p) => s + p.animations.reduce((s2, a) => s2 + a.frameCount, 0), 0,
@@ -2315,6 +2589,7 @@
 
     updateAnimButtonState();
     updateFontButtonState();
+    updateParticleButtonState();
 
     ['search', 'cat-filter', 'ext-filter', 'type-filter', 'sort'].forEach((id) => {
       document.getElementById(id).addEventListener('input', applyFilters);

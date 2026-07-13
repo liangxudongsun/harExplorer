@@ -1,17 +1,107 @@
 /**
  * In-browser Spine → PNG sequence baker.
  *
- * Version-agnostic: works against whatever `spine` global is loaded on the
- * page (the 3.8 player bundle in viewer.html, the 3.7 webgl build inside
- * spine37-player.html) — both expose the same webgl API surface.
- *
  * spineBakeFrames(opts, onProgress?) →
- *   { animations: [{ name, duration, frameCount, width, height, scale,
- *                    origin, frames: Blob[] }], missingRegions: string[] }
+ *   { pipeline, animations: [...], missingRegions: string[] }
  *
- * opts.skeletonJson must already be in the shape the current runtime expects
- * (skins array for 3.8, skins map for 3.7).
+ * opts.pipeline — see BAKE_PIPELINES (default: standard).
  */
+const BAKE_PIPELINES = {
+  /** Baseline: dual-pass alpha, max 2048px. */
+  standard: {
+    label: '标准（当前默认）',
+    hint: '双通道 Alpha 合成 · 2048 上限',
+    scaleMul: 1,
+    maxSize: 2048,
+    composite: 'dual',
+    supersample: 1,
+    filter: 'linear',
+  },
+  /** Higher output resolution (2× scale, 4096 cap). */
+  'high-res': {
+    label: '高分辨率 2×',
+    hint: '针对 skeleton 缩放导致输出偏小的场景',
+    scaleMul: 2,
+    maxSize: 4096,
+    composite: 'dual',
+    supersample: 1,
+    filter: 'linear',
+  },
+  /** Raise canvas cap without changing scale. */
+  'max-canvas': {
+    label: '超大画布 8192',
+    hint: '仅提高 maxSize 上限，排查是否被 2048 截断',
+    scaleMul: 1,
+    maxSize: 8192,
+    composite: 'dual',
+    supersample: 1,
+    filter: 'linear',
+  },
+  /** Single transparent pass — no dual compositing. */
+  'direct-alpha': {
+    label: '直通透明（无双通道）',
+    hint: '跳过黑/白底合成，对比 Alpha 精度损失；additive 可能有黑块',
+    scaleMul: 1,
+    maxSize: 2048,
+    composite: 'direct',
+    supersample: 1,
+    filter: 'linear',
+  },
+  /** Render 2× internally then downscale. */
+  'supersample-2x': {
+    label: '超采样 2× 降采样',
+    hint: '内部 2× 渲染后 Lanczos 式平滑缩小，改善锯齿与线性模糊',
+    scaleMul: 1,
+    maxSize: 4096,
+    composite: 'dual',
+    supersample: 2,
+    filter: 'linear',
+  },
+  /** Nearest-neighbor atlas sampling. */
+  nearest: {
+    label: '最近邻滤镜',
+    hint: '关闭 Linear 贴图过滤，对比边缘是否过软',
+    scaleMul: 1,
+    maxSize: 2048,
+    composite: 'dual',
+    supersample: 1,
+    filter: 'nearest',
+  },
+  /** Dual-pass with float intermediate math before quantize. */
+  'precise-alpha': {
+    label: '高精度 Alpha 合成',
+    hint: '双通道合成改用 float 运算，对比 8-bit 色带/边缘',
+    scaleMul: 1,
+    maxSize: 2048,
+    composite: 'dual-float',
+    supersample: 1,
+    filter: 'linear',
+  },
+};
+
+function resolvePipeline(id, userScale) {
+  const key = BAKE_PIPELINES[id] ? id : 'standard';
+  const p = BAKE_PIPELINES[key];
+  return {
+    id: key,
+    label: p.label,
+    hint: p.hint,
+    scale: Math.max(0.1, (userScale || 1) * p.scaleMul),
+    maxSize: p.maxSize,
+    composite: p.composite,
+    supersample: p.supersample,
+    filter: p.filter,
+  };
+}
+
+function applyAtlasFilter(atlas, filter) {
+  if (filter !== 'nearest') return;
+  const nearest = spine.TextureFilter?.Nearest ?? 9728;
+  for (const page of atlas.pages) {
+    page.texture?.setFilters?.(nearest, nearest);
+  }
+}
+
 async function spineBakeFrames(opts, onProgress) {
   const {
     skeletonJson,
@@ -19,19 +109,24 @@ async function spineBakeFrames(opts, onProgress) {
     images = {},
     fps = 30,
     scale = 1,
-    maxSize = 2048,
+    maxSize: maxSizeOverride,
     animations = [],
+    pipeline: pipelineId = 'standard',
   } = opts;
+  const pipe = resolvePipeline(pipelineId, scale);
+  if (maxSizeOverride != null) pipe.maxSize = maxSizeOverride;
   const progress = typeof onProgress === 'function' ? onProgress : () => {};
 
   const canvas = document.createElement('canvas');
   canvas.width = 64;
   canvas.height = 64;
-  const gl = canvas.getContext('webgl', { alpha: false, preserveDrawingBuffer: true });
+  const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
   if (!gl) throw new Error('WebGL 不可用');
   const renderer = new spine.webgl.SceneRenderer(canvas, gl, false);
   const outCanvas = document.createElement('canvas');
   const outCtx = outCanvas.getContext('2d');
+  const workCanvas = document.createElement('canvas');
+  const workCtx = workCanvas.getContext('2d');
 
   const placeholder = () => {
     const c = document.createElement('canvas');
@@ -42,8 +137,8 @@ async function spineBakeFrames(opts, onProgress) {
   const atlas = new spine.TextureAtlas(atlasText, (path) =>
     new spine.webgl.GLTexture(renderer.context, images[path] ?? placeholder()),
   );
+  applyAtlasFilter(atlas, pipe.filter);
 
-  // Skip attachments whose regions live in atlases the HAR didn't capture.
   const base = new spine.AtlasAttachmentLoader(atlas);
   const missing = new Set();
   const wrap = (fn) => (...args) => {
@@ -81,8 +176,6 @@ async function spineBakeFrames(opts, onProgress) {
   let doneFrames = 0;
   progress(0, totalFrames, '准备中');
 
-  // Sample the whole animation so the canvas fits every frame and all frames
-  // of one animation share the same size / alignment.
   function animBounds(name) {
     state.clearTracks();
     skeleton.setToSetupPose();
@@ -109,61 +202,109 @@ async function spineBakeFrames(opts, onProgress) {
     return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 };
   }
 
-  const captureBlob = () =>
-    new Promise((resolve, reject) => {
-      outCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png');
-    });
+  function readGlPixels(cw, ch) {
+    const px = new Uint8Array(cw * ch * 4);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return px;
+  }
 
-  /**
-   * Bake one frame to straight-alpha RGBA.
-   *
-   * Additive / multiply slots (flames, glows, shadows) are background-
-   * dependent, so a single transparent-background render leaves their
-   * texture's black/white base baked in. Instead render the same pose over
-   * black and over white: any GL blend mode is affine in the background
-   * (result = premultColor + background * k), so per pixel
-   *   k = 1 - (white - black)   and   alpha = 1 - mean(k)
-   * recovers premultiplied color (the black render) and an alpha that is
-   * exact for normal and pure-additive pixels.
-   */
-  function compositeFrame(cw, ch, drawPose) {
-    const n = cw * ch * 4;
+  function flipGlToImageData(px, cw, ch, ctx) {
+    const img = ctx.createImageData(cw, ch);
+    const out = img.data;
+    for (let y = 0; y < ch; y++) {
+      const src = (ch - 1 - y) * cw * 4;
+      const dst = y * cw * 4;
+      out.set(px.subarray(src, src + cw * 4), dst);
+    }
+    return img;
+  }
+
+  function compositeDual(ctx, cw, ch, drawPose, useFloat) {
     const readPass = (bg) => {
       gl.viewport(0, 0, cw, ch);
       gl.clearColor(bg, bg, bg, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       drawPose();
-      const px = new Uint8Array(n);
-      gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      return px;
+      return readGlPixels(cw, ch);
     };
     const black = readPass(0);
     const white = readPass(1);
-    const img = outCtx.createImageData(cw, ch);
+    const img = ctx.createImageData(cw, ch);
     const out = img.data;
     for (let y = 0; y < ch; y++) {
-      // GL rows are bottom-up; ImageData is top-down.
       const src = (ch - 1 - y) * cw * 4;
       const dst = y * cw * 4;
       for (let x = 0; x < cw * 4; x += 4) {
         const s = src + x;
-        const r = black[s], g = black[s + 1], b = black[s + 2];
-        const a255 =
-          765 - (white[s] - r) - (white[s + 1] - g) - (white[s + 2] - b);
-        const a = Math.max(0, Math.min(255, Math.round(a255 / 3)));
+        const br = black[s], bg = black[s + 1], bb = black[s + 2];
+        const wr = white[s], wg = white[s + 1], wb = white[s + 2];
+        let a;
+        if (useFloat) {
+          const a255 = 765 - (wr - br) - (wg - bg) - (wb - bb);
+          a = Math.max(0, Math.min(255, a255 / 3));
+        } else {
+          a = Math.max(0, Math.min(255, Math.round((765 - (wr - br) - (wg - bg) - (wb - bb)) / 3)));
+        }
         const d = dst + x;
-        if (a === 0) {
+        if (a <= 0.5) {
           out[d] = out[d + 1] = out[d + 2] = out[d + 3] = 0;
         } else {
-          // Un-premultiply against the recovered alpha.
-          out[d] = Math.min(255, Math.round((r * 255) / a));
-          out[d + 1] = Math.min(255, Math.round((g * 255) / a));
-          out[d + 2] = Math.min(255, Math.round((b * 255) / a));
-          out[d + 3] = a;
+          out[d] = Math.min(255, Math.round((br * 255) / a));
+          out[d + 1] = Math.min(255, Math.round((bg * 255) / a));
+          out[d + 2] = Math.min(255, Math.round((bb * 255) / a));
+          out[d + 3] = Math.round(a);
         }
       }
     }
-    outCtx.putImageData(img, 0, 0);
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function compositeDirect(ctx, cw, ch, drawPose) {
+    gl.viewport(0, 0, cw, ch);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    drawPose();
+    ctx.putImageData(flipGlToImageData(readGlPixels(cw, ch), cw, ch, ctx), 0, 0);
+  }
+
+  function renderFrame(cw, ch, zoom, b, targetCtx) {
+    renderer.camera.setViewport(cw, ch);
+    renderer.camera.position.set(b.x + b.w / 2, b.y + b.h / 2, 0);
+    renderer.camera.zoom = 1 / zoom;
+    renderer.camera.update();
+    const drawPose = () => {
+      renderer.begin();
+      renderer.drawSkeleton(skeleton, false);
+      renderer.end();
+    };
+    if (pipe.composite === 'direct') compositeDirect(targetCtx, cw, ch, drawPose);
+    else compositeDual(targetCtx, cw, ch, drawPose, pipe.composite === 'dual-float');
+  }
+
+  function downscaleToOutput(renderW, renderH, outW, outH) {
+    outCanvas.width = outW;
+    outCanvas.height = outH;
+    outCtx.clearRect(0, 0, outW, outH);
+    outCtx.imageSmoothingEnabled = true;
+    outCtx.imageSmoothingQuality = 'high';
+    outCtx.drawImage(workCanvas, 0, 0, renderW, renderH, 0, 0, outW, outH);
+  }
+
+  const captureBlob = () =>
+    new Promise((resolve, reject) => {
+      outCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png');
+    });
+
+  function layoutForBounds(b) {
+    let s = pipe.scale;
+    if (Math.max(b.w, b.h) * s > pipe.maxSize) s = pipe.maxSize / Math.max(b.w, b.h);
+    const outW = Math.max(2, Math.round(b.w * s));
+    const outH = Math.max(2, Math.round(b.h * s));
+    const ss = pipe.supersample;
+    const renderW = Math.max(2, Math.round(outW * ss));
+    const renderH = Math.max(2, Math.round(outH * ss));
+    const renderZoom = s * ss;
+    return { s, outW, outH, renderW, renderH, renderZoom, ss };
   }
 
   const out = [];
@@ -173,14 +314,13 @@ async function spineBakeFrames(opts, onProgress) {
       out.push({ name, error: 'empty bounds', frames: [] });
       continue;
     }
-    let s = scale;
-    if (Math.max(b.w, b.h) * s > maxSize) s = maxSize / Math.max(b.w, b.h);
-    const cw = Math.max(2, Math.round(b.w * s));
-    const ch = Math.max(2, Math.round(b.h * s));
-    canvas.width = cw;
-    canvas.height = ch;
-    outCanvas.width = cw;
-    outCanvas.height = ch;
+    const { s, outW, outH, renderW, renderH, renderZoom, ss } = layoutForBounds(b);
+    canvas.width = renderW;
+    canvas.height = renderH;
+    workCanvas.width = renderW;
+    workCanvas.height = renderH;
+    outCanvas.width = outW;
+    outCanvas.height = outH;
 
     const dur = data.findAnimation(name).duration;
     const frameCount = frameCountOf(name);
@@ -195,15 +335,20 @@ async function spineBakeFrames(opts, onProgress) {
       state.apply(skeleton);
       skeleton.updateWorldTransform();
 
-      renderer.camera.setViewport(cw, ch);
-      renderer.camera.position.set(b.x + b.w / 2, b.y + b.h / 2, 0);
-      renderer.camera.zoom = 1 / s;
-      renderer.camera.update();
-      compositeFrame(cw, ch, () => {
-        renderer.begin();
-        renderer.drawSkeleton(skeleton, false);
-        renderer.end();
-      });
+      if (ss > 1) {
+        canvas.width = renderW;
+        canvas.height = renderH;
+        workCanvas.width = renderW;
+        workCanvas.height = renderH;
+        renderFrame(renderW, renderH, renderZoom, b, workCtx);
+        downscaleToOutput(renderW, renderH, outW, outH);
+      } else {
+        canvas.width = outW;
+        canvas.height = outH;
+        outCanvas.width = outW;
+        outCanvas.height = outH;
+        renderFrame(outW, outH, s, b, outCtx);
+      }
 
       frames.push(await captureBlob());
       doneFrames++;
@@ -213,16 +358,31 @@ async function spineBakeFrames(opts, onProgress) {
       name,
       duration: +dur.toFixed(4),
       frameCount,
-      width: cw,
-      height: ch,
+      width: outW,
+      height: outH,
       scale: +s.toFixed(4),
+      renderWidth: renderW,
+      renderHeight: renderH,
+      supersample: ss,
       origin: { x: +b.x.toFixed(2), y: +b.y.toFixed(2) },
       frames,
     });
   }
 
   gl.getExtension('WEBGL_lose_context')?.loseContext();
-  return { animations: out, missingRegions: [...missing] };
+  return {
+    pipeline: {
+      id: pipe.id,
+      label: pipe.label,
+      hint: pipe.hint,
+      composite: pipe.composite,
+      filter: pipe.filter,
+      maxSize: pipe.maxSize,
+    },
+    animations: out,
+    missingRegions: [...missing],
+  };
 }
 
+window.BAKE_PIPELINES = BAKE_PIPELINES;
 window.spineBakeFrames = spineBakeFrames;

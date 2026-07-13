@@ -2,6 +2,20 @@ node_modules/
 dist/
 temp/
 uploads/
+release/_cache/
+release/_staging/
+release/_test-extract/
+release/*.zip
 *.har
 .DS_Store
 Thumbs.db
+
+# Cocos Creator project caches / builds (keep source under cocos-projects/)
+cocos-projects/**/library/
+cocos-projects/**/temp/
+cocos-projects/**/local/
+cocos-projects/**/build/
+cocos-projects/**/profiles/
+cocos-projects/**/.creator/
+cocos-projects/**/.cocosmcp/
+cocos-projects/**/*.zip

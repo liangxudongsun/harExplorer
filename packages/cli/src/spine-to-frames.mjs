@@ -13,6 +13,7 @@
  * Usage:
  *   node spine-to-frames.mjs <packDir> [--out dir] [--fps 30] [--scale 1]
  *                            [--anim name[,name...]] [--max-size 2048]
+ *                            [--pipeline standard|high-res|max-canvas|direct-alpha|supersample-2x|nearest|precise-alpha]
  */
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'fs';
 import { join, dirname, basename, resolve } from 'path';
@@ -30,7 +31,9 @@ const opt = (name, def) => {
 };
 const FPS = parseFloat(opt('fps', '30'));
 const SCALE = parseFloat(opt('scale', '1'));
-const MAX_SIZE = parseInt(opt('max-size', '2048'), 10);
+const maxSizeIdx = args.indexOf('--max-size');
+const MAX_SIZE = maxSizeIdx >= 0 ? parseInt(args[maxSizeIdx + 1], 10) : undefined;
+const PIPELINE = opt('pipeline', 'standard');
 const ANIMS = opt('anim', '')
   .split(',')
   .map((s) => s.trim())
@@ -87,7 +90,7 @@ const OUT = resolve(opt('out', join(packDir, 'frames')));
 mkdirSync(OUT, { recursive: true });
 
 console.log(`Pack: ${packDir}`);
-console.log(`Spine ${version} → runtime ${is37 ? '3.7' : '3.8'} · fps ${FPS} · scale ${SCALE}`);
+console.log(`Spine ${version} → runtime ${is37 ? '3.7' : '3.8'} · fps ${FPS} · scale ${SCALE} · pipeline ${PIPELINE}${MAX_SIZE != null ? ` · maxSize ${MAX_SIZE}` : ''}`);
 
 const browser = await chromium.launch({
   headless: true,
@@ -101,7 +104,7 @@ await page.addScriptTag({ path: join(VENDOR, runtimeFile) });
 await page.addScriptTag({ path: join(VENDOR, '..', 'spine-bake.js') });
 
 const result = await page.evaluate(
-  async ({ skeletonJson, atlasText, pageImages, fps, scale, maxSize, is37, anims }) => {
+  async ({ skeletonJson, atlasText, pageImages, fps, scale, maxSize, pipeline, is37, anims }) => {
     // -- skeleton JSON shape per runtime generation --
     function skinsAsArray(json) {
       if (!json.skins || Array.isArray(json.skins)) return json;
@@ -133,7 +136,7 @@ const result = await page.evaluate(
     // Shared baker (spine-bake.js) does bounds sampling, deterministic
     // stepping and dual-background compositing for additive/multiply slots.
     const result = await window.spineBakeFrames(
-      { skeletonJson: skelData, atlasText, images, fps, scale, maxSize, animations: anims },
+      { skeletonJson: skelData, atlasText, images, fps, scale, maxSize, pipeline, animations: anims },
       null,
     );
 
@@ -150,12 +153,12 @@ const result = await page.evaluate(
     }
     return result;
   },
-  { skeletonJson, atlasText, pageImages, fps: FPS, scale: SCALE, maxSize: MAX_SIZE, is37, anims: ANIMS },
+  { skeletonJson, atlasText, pageImages, fps: FPS, scale: SCALE, maxSize: MAX_SIZE, pipeline: PIPELINE, is37, anims: ANIMS },
 );
 
 await browser.close();
 
-const meta = { pack: basename(resolve(packDir)), spineVersion: version, fps: FPS, animations: [] };
+const meta = { pack: basename(resolve(packDir)), spineVersion: version, fps: FPS, pipeline: result.pipeline ?? { id: PIPELINE }, animations: [] };
 for (const anim of result.animations) {
   if (anim.error) {
     console.warn(`  ! ${anim.name}: ${anim.error}`);

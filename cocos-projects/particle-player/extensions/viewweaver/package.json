@@ -1,0 +1,109 @@
+{
+  "name": "viewweaver",
+  "version": "0.2.0",
+  "description": "Cocos Creator extension that auto-generates typed View bindings from prefabs",
+  "author": "h5_game_sh_tpe",
+  "main": "./dist/main.js",
+  "package_version": 2,
+  "editor": ">=3.8.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "watch": "tsc -p tsconfig.build.json -w",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "cli": "node --experimental-strip-types src/cli.ts",
+    "test": "node --experimental-strip-types tests/smoke.test.ts"
+  },
+  "devDependencies": {
+    "@cocos/creator-types": "^3.8.0",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  },
+  "contributions": {
+    "menu": [
+      {
+        "path": "i18n:menu.tools/viewweaver",
+        "label": "i18n:viewweaver.menu.regenerateAll",
+        "message": "regenerate-all"
+      },
+      {
+        "path": "i18n:menu.tools/viewweaver",
+        "label": "i18n:viewweaver.menu.validateAll",
+        "message": "validate-all"
+      }
+    ],
+    "assets": {
+      "menu": {
+        "methods": "./dist/assets-menu.js",
+        "assetMenu": "onAssetMenu"
+      }
+    },
+    "inspector": {
+      "section": {
+        "asset": {
+          "prefab": "./dist/contributions/inspector/asset-prefab.js"
+        },
+        "node": {
+          "cc.UITransform": "./dist/contributions/inspector/node-uitransform.js"
+        }
+      }
+    },
+    "messages": {
+      "generate-from-asset": {
+        "methods": [
+          "generateFromAsset"
+        ]
+      },
+      "generate-for-ai": {
+        "methods": [
+          "generateForAI"
+        ]
+      },
+      "regenerate-all": {
+        "methods": [
+          "regenerateAll"
+        ]
+      },
+      "validate-all": {
+        "methods": [
+          "validateAll"
+        ]
+      },
+      "prepare-prefab-config": {
+        "methods": [
+          "preparePrefabConfig"
+        ]
+      },
+      "apply-and-generate": {
+        "methods": [
+          "applyAndGenerate"
+        ]
+      },
+      "save-bind-only": {
+        "methods": [
+          "saveBindOnly"
+        ]
+      },
+      "query-node-status": {
+        "methods": [
+          "queryNodeStatus"
+        ]
+      },
+      "toggle-node-export": {
+        "methods": [
+          "toggleNodeExport"
+        ]
+      },
+      "asset-db:asset-change": {
+        "methods": [
+          "onAssetChange"
+        ]
+      }
+    },
+    "asset-db": {
+      "mount": {
+        "path": "./assets",
+        "readonly": true
+      }
+    }
+  }
+}

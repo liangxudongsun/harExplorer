@@ -54,6 +54,11 @@ for (const extra of ['spine37-player.html', 'spine-bake.js']) {
   const src = join(__dirname, '..', '..', 'web', 'viewer', extra);
   if (existsSync(src)) cpSync(src, join(OUT_DIR, extra));
 }
+// Cocos particle preview shell (web-mobile build).
+const particlePlayerSrc = join(__dirname, '..', '..', 'web', 'viewer', 'particle-player');
+if (existsSync(particlePlayerSrc)) {
+  cpSync(particlePlayerSrc, join(OUT_DIR, 'particle-player'), { recursive: true });
+}
 
 console.log(JSON.stringify({
   ok: true,

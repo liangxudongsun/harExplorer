@@ -4,6 +4,7 @@ import { scanCocosHar, tagCocosTextures } from './parse-import.mjs';
 import { extractCocosAnimationPacks, bakeAnimationFrames } from './extract-animations.mjs';
 import { parseAtlasPages, normalizeSkeletonJsonForRuntime } from './spine-extract.mjs';
 import { extractBitmapFonts, matchAllFontTextures, fntConfigToBmFont, glyphPreview, fontAtlasExtent } from './bitmap-font.mjs';
+import { writeParticlePacks } from './extract-particles.mjs';
 
 const TEXTURE_EXT = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif',
@@ -417,6 +418,7 @@ export function buildCocosTab(harPath, outDir, src) {
   const tagged = tagCocosTextures(textures, scan, animExtract.spinePacks);
   const animationManifest = writeAnimationPacks(outDir, src.id, animExtract.all);
   const fontManifest = writeBitmapFonts(outDir, src.id, entries, textures);
+  const particleManifest = writeParticlePacks(outDir, src.id, entries);
   const resourceTypes = [...new Set(tagged.textures.map((t) => t.resourceType))].sort();
 
   return {
@@ -437,6 +439,7 @@ export function buildCocosTab(harPath, outDir, src) {
       harEntries: entries.length,
       previewCount: animationManifest.length,
       fontCount: fontManifest.length,
+      particleCount: particleManifest.length,
       ...tagged.meta,
     },
     textures: tagged.textures,
@@ -444,6 +447,7 @@ export function buildCocosTab(harPath, outDir, src) {
     sequenceSummary: tagged.sequenceSummary,
     animationManifest,
     fontManifest,
+    particleManifest,
     categories: [...new Set(tagged.textures.map((t) => t.category))].sort(),
     extensions: [...new Set(tagged.textures.map((t) => t.ext))].sort(),
     resourceTypes,

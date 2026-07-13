@@ -9,6 +9,7 @@ export {
   extractCocosAnimationPacks,
   bakeAnimationFrames,
 } from './engines/cocos/extract-animations.mjs';
+export { writeParticlePacks } from './engines/cocos/extract-particles.mjs';
 export {
   parseAtlasPages,
   skeletonJsonForExport,

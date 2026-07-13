@@ -1,0 +1,8 @@
+{
+  "name": "particle-player",
+  "uuid": "ebc6b024-7ddc-4090-abcc-adc1b0217e2d",
+  "creator": {
+    "version": "3.8.8"
+  },
+  "description": "harExplore particle preview shell (from baseAIAutoCocos)"
+}

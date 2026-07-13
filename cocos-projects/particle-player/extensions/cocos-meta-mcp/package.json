@@ -1,0 +1,29 @@
+{
+    "package_version": 2,
+    "name": "cocos-meta-mcp",
+    "version": "3.0.0",
+    "title": "CocosMetaMCP",
+    "description": "CocosMetaMCP HTTP bridge for Creator (MCP exec, asset meta, refresh)",
+    "author": "cocos-meta-mcp",
+    "editor": ">=3.8.0",
+    "main": "./dist/main.js",
+    "contributions": {
+        "scene": {
+            "script": "./dist/scene.js"
+        },
+        "menu": [
+            {
+                "path": "CocosMetaMCP",
+                "label": "刷新 IR 资源并生成 meta",
+                "message": "refresh-ir-meta"
+            }
+        ],
+        "messages": {
+            "refresh-ir-meta": {
+                "methods": [
+                    "refreshIrMeta"
+                ]
+            }
+        }
+    }
+}
