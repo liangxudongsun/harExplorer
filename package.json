@@ -15,6 +15,7 @@
     "spine": "node packages/cli/src/extract-cocos-spine-packs.mjs",
     "font": "node packages/cli/src/extract-bitmap-font.mjs",
     "particle": "node packages/cli/src/extract-har-particles.mjs",
+    "audio": "node packages/cli/src/extract-har-audio.mjs",
     "bake": "node packages/cli/src/spine-to-frames.mjs",
     "spine-player": "node packages/cli/src/serve-spine-player.mjs",
     "pack": "node scripts/pack-portable-win.mjs",

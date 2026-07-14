@@ -262,19 +262,31 @@
     }
     .mode-tab.active { color: var(--text); border-color: var(--accent2); background: rgba(167,139,250,0.12); }
     .mode-tab:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-    #anim-wrap, #font-wrap, #particle-wrap {
+    #anim-wrap, #font-wrap, #particle-wrap, #audio-wrap {
       flex: 1;
       min-width: 0;
       display: none;
       overflow: hidden;
     }
-    #anim-wrap.open, #font-wrap.open, #particle-wrap.open { display: flex; }
-    #anim-list, #font-list, #particle-list {
+    #anim-wrap.open, #font-wrap.open, #particle-wrap.open, #audio-wrap.open { display: flex; }
+    #anim-list, #font-list, #particle-list, #audio-list {
       width: 300px;
       flex-shrink: 0;
       border-right: 1px solid var(--border);
       overflow-y: auto;
       padding: 12px;
+    }
+    #audio-stage {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      overflow-y: auto;
+      gap: 14px;
+    }
+    #audio-player {
+      width: min(520px, 100%);
     }
     #particle-stage {
       flex: 1;
@@ -434,6 +446,7 @@
       <button type="button" class="mode-tab" data-mode="animations" id="mode-anim-btn">动画预览</button>
       <button type="button" class="mode-tab" data-mode="fonts" id="mode-font-btn">位图字体</button>
       <button type="button" class="mode-tab" data-mode="particles" id="mode-particle-btn">粒子预览</button>
+      <button type="button" class="mode-tab" data-mode="audio" id="mode-audio-btn">音频</button>
     </div>
     <div class="toolbar" id="toolbar-textures">
       <input type="search" id="search" placeholder="搜索文件名 / 路径…" />
@@ -456,6 +469,15 @@
     </div>
     <div class="toolbar" id="toolbar-particle" style="display:none">
       <input type="search" id="particle-search" placeholder="搜索粒子名…" />
+    </div>
+    <div class="toolbar" id="toolbar-audio" style="display:none">
+      <input type="search" id="audio-search" placeholder="搜索音频名…" />
+      <select id="audio-sort">
+        <option value="size-desc">体积 ↓</option>
+        <option value="size-asc">体积 ↑</option>
+        <option value="name-asc">名称 A-Z</option>
+        <option value="duration-desc">时长 ↓</option>
+      </select>
     </div>
     <div class="stats" id="stats"></div>
   </header>
@@ -561,6 +583,21 @@
         <dl class="kv" id="particle-meta"></dl>
       </div>
     </div>
+    <div id="audio-wrap">
+      <div id="audio-list"></div>
+      <div id="audio-stage">
+        <div class="font-panel">
+          <h3>试听</h3>
+          <audio id="audio-player" controls preload="metadata"></audio>
+          <div id="audio-status" class="anim-status" style="margin-top:8px"></div>
+        </div>
+        <div class="anim-controls" style="margin:0">
+          <button type="button" id="audio-dl-one" disabled>⬇ 当前音频</button>
+          <button type="button" id="audio-dl-all" disabled>⬇ 全部音频</button>
+        </div>
+        <dl class="kv" id="audio-meta"></dl>
+      </div>
+    </div>
     <aside id="detail">
       <h2 id="d-name"></h2>
       <div class="preview"><img id="d-img" alt="" /></div>
@@ -626,14 +663,18 @@
       animationManifest = tab.animationManifest ?? [];
       fontManifest = tab.fontManifest ?? [];
       particleManifest = tab.particleManifest ?? [];
+      audioManifest = tab.audioManifest ?? [];
       currentFont = null;
       currentParticle = null;
+      currentAudio = null;
       selectedId = null;
       stopAnimPlayer();
       stopParticlePlayer();
+      stopAudioPlayer();
       updateAnimButtonState();
       updateFontButtonState();
       updateParticleButtonState();
+      updateAudioButtonState();
       rebuildFilters();
       renderTabs();
       if (viewMode === 'animations') {
@@ -642,6 +683,8 @@
         renderFontList();
       } else if (viewMode === 'particles') {
         ensureParticleManifest().then(() => renderParticleList());
+      } else if (viewMode === 'audio') {
+        ensureAudioManifest().then(() => renderAudioList());
       } else applyFilters();
     }
 
@@ -900,6 +943,9 @@
     let currentParticle = null;
     let particleReady = false;
     let particleFiltered = [];
+    let audioManifest = [];
+    let currentAudio = null;
+    let audioFiltered = [];
     let fontFiltered = [];
     let currentFont = null;
     let fontAtlasImage = null;
@@ -991,6 +1037,13 @@
         });
         return;
       }
+      if (mode === 'audio') {
+        ensureAudioManifest().then((items) => {
+          if (!items.length && !(meta.audioCount ?? 0)) return;
+          applyViewMode(mode);
+        });
+        return;
+      }
       applyViewMode(mode);
     }
 
@@ -1003,24 +1056,34 @@
       document.getElementById('anim-wrap').classList.toggle('open', mode === 'animations');
       document.getElementById('font-wrap').classList.toggle('open', mode === 'fonts');
       document.getElementById('particle-wrap').classList.toggle('open', mode === 'particles');
+      document.getElementById('audio-wrap').classList.toggle('open', mode === 'audio');
       document.getElementById('toolbar-textures').style.display = mode === 'textures' ? 'flex' : 'none';
       document.getElementById('toolbar-anim').style.display = mode === 'animations' ? 'flex' : 'none';
       document.getElementById('toolbar-font').style.display = mode === 'fonts' ? 'flex' : 'none';
       document.getElementById('toolbar-particle').style.display = mode === 'particles' ? 'flex' : 'none';
+      document.getElementById('toolbar-audio').style.display = mode === 'audio' ? 'flex' : 'none';
       document.getElementById('detail').style.display = mode === 'textures' ? '' : 'none';
       if (mode === 'animations') {
+        stopAudioPlayer();
         renderAnimList();
         updateAnimStats();
       } else if (mode === 'fonts') {
         stopAnimPlayer();
         stopParticlePlayer();
+        stopAudioPlayer();
         renderFontList();
       } else if (mode === 'particles') {
         stopAnimPlayer();
+        stopAudioPlayer();
         renderParticleList();
+      } else if (mode === 'audio') {
+        stopAnimPlayer();
+        stopParticlePlayer();
+        renderAudioList();
       } else {
         stopAnimPlayer();
         stopParticlePlayer();
+        stopAudioPlayer();
         updateStats();
       }
     }
@@ -2029,6 +2092,167 @@
     };
     document.getElementById('particle-search').addEventListener('input', renderParticleList);
 
+    // ---------- 音频（cc.AudioClip） ----------
+
+    function fmtDuration(sec) {
+      if (sec == null || !Number.isFinite(sec)) return '—';
+      const s = Math.max(0, sec);
+      const m = Math.floor(s / 60);
+      const r = (s % 60).toFixed(2).padStart(5, '0');
+      return m > 0 ? `${m}:${r}` : `${s.toFixed(2)}s`;
+    }
+
+    function updateAudioButtonState() {
+      const btn = document.getElementById('mode-audio-btn');
+      const count = audioManifest.length || meta.audioCount || 0;
+      btn.disabled = count === 0;
+      btn.title = count === 0
+        ? '当前 Tab 未识别到音频（仅 Cocos HAR 支持）'
+        : `识别到 ${count} 个音频`;
+      if (count === 0 && viewMode === 'audio') applyViewMode('textures');
+    }
+
+    async function ensureAudioManifest() {
+      if (audioManifest.length) return audioManifest;
+      const n = meta.audioCount ?? 0;
+      if (!n || !activeTab?.id) return [];
+      try {
+        const res = await fetch(`audio/${activeTab.id}/manifest.json`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        audioManifest = data.items ?? [];
+        activeTab.audioManifest = audioManifest;
+        updateAudioButtonState();
+      } catch {
+        /* ignore */
+      }
+      return audioManifest;
+    }
+
+    function stopAudioPlayer() {
+      const el = document.getElementById('audio-player');
+      if (el) {
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+      }
+      currentAudio = null;
+      document.getElementById('audio-status').textContent = '';
+    }
+
+    function sortAudioItems(items) {
+      const mode = document.getElementById('audio-sort')?.value || 'size-desc';
+      const arr = items.slice();
+      arr.sort((a, b) => {
+        if (mode === 'size-asc') return (a.size || 0) - (b.size || 0);
+        if (mode === 'name-asc') return String(a.name).localeCompare(String(b.name));
+        if (mode === 'duration-desc') return (b.duration || 0) - (a.duration || 0);
+        return (b.size || 0) - (a.size || 0);
+      });
+      return arr;
+    }
+
+    function renderAudioList() {
+      const q = document.getElementById('audio-search').value.toLowerCase();
+      audioFiltered = sortAudioItems(
+        audioManifest.filter(
+          (a) =>
+            !q ||
+            String(a.name).toLowerCase().includes(q) ||
+            String(a.id).toLowerCase().includes(q),
+        ),
+      );
+      const list = document.getElementById('audio-list');
+      list.innerHTML = '';
+      if (!audioFiltered.length) {
+        list.innerHTML = '<div class="empty">当前 Tab 未识别到音频</div>';
+      }
+      for (const a of audioFiltered) {
+        const el = document.createElement('div');
+        el.className = 'anim-item' + (currentAudio?.id === a.id ? ' active' : '');
+        el.innerHTML =
+          `<div class="title">${a.name}</div>` +
+          `<div class="sub">${a.ext || ''} · ${a.sizeFmt || '—'} · ${fmtDuration(a.duration)}</div>`;
+        el.onclick = () => selectAudio(a);
+        list.appendChild(el);
+      }
+      document.getElementById('stats').innerHTML =
+        `识别到 <strong>${audioFiltered.length}</strong> / ${audioManifest.length} 个音频`;
+      document.getElementById('audio-dl-one').disabled = !currentAudio;
+      document.getElementById('audio-dl-all').disabled = !audioManifest.length;
+      if (!currentAudio && audioFiltered.length) selectAudio(audioFiltered[0]);
+    }
+
+    function selectAudio(item) {
+      currentAudio = item;
+      renderAudioList();
+      const player = document.getElementById('audio-player');
+      const status = document.getElementById('audio-status');
+      if (item.audioUrl) {
+        player.src = item.audioUrl;
+        status.textContent = `已加载 ${item.name}`;
+      } else {
+        player.removeAttribute('src');
+        player.load();
+        status.textContent = '无音频文件';
+      }
+      const rows = [
+        ['名称', item.name],
+        ['类型', item.kind],
+        ['时长', fmtDuration(item.duration)],
+        ['格式', item.ext || '—'],
+        ['体积', item.sizeFmt || '—'],
+        ['MIME', item.mime || '—'],
+        ['文件', item.audioUrl ? `<a href="${item.audioUrl}" download>下载</a>` : '—'],
+        ['uuid', item.uuid || '—'],
+      ];
+      document.getElementById('audio-meta').innerHTML = rows
+        .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+        .join('');
+      document.getElementById('audio-dl-one').disabled = !item.audioUrl;
+    }
+
+    async function downloadAudioBlob(url, name) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`download failed: ${url}`);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    document.getElementById('audio-dl-one').onclick = async () => {
+      if (!currentAudio?.audioUrl) return;
+      try {
+        await downloadAudioBlob(
+          currentAudio.audioUrl,
+          `${currentAudio.name}${currentAudio.ext || '.mp3'}`,
+        );
+      } catch (err) {
+        document.getElementById('audio-status').textContent = `下载失败：${err.message}`;
+      }
+    };
+    document.getElementById('audio-dl-all').onclick = async () => {
+      const status = document.getElementById('audio-status');
+      let n = 0;
+      for (const item of audioManifest) {
+        if (!item.audioUrl) continue;
+        try {
+          await downloadAudioBlob(item.audioUrl, `${item.name}${item.ext || '.mp3'}`);
+          n += 1;
+          status.textContent = `已下载 ${n} / ${audioManifest.length}`;
+          await new Promise((r) => setTimeout(r, 120));
+        } catch {
+          /* continue */
+        }
+      }
+      status.textContent = `完成：${n} 个音频`;
+    };
+    document.getElementById('audio-search').addEventListener('input', renderAudioList);
+    document.getElementById('audio-sort').addEventListener('change', renderAudioList);
+
     // ---------- 位图字体（cc.BitmapFont） ----------
 
     function updateFontButtonState() {
@@ -2590,6 +2814,7 @@
     updateAnimButtonState();
     updateFontButtonState();
     updateParticleButtonState();
+    updateAudioButtonState();
 
     ['search', 'cat-filter', 'ext-filter', 'type-filter', 'sort'].forEach((id) => {
       document.getElementById(id).addEventListener('input', applyFilters);

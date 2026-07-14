@@ -10,6 +10,7 @@ export {
   bakeAnimationFrames,
 } from './engines/cocos/extract-animations.mjs';
 export { writeParticlePacks } from './engines/cocos/extract-particles.mjs';
+export { writeAudioPacks } from './engines/cocos/extract-audio.mjs';
 export {
   parseAtlasPages,
   skeletonJsonForExport,

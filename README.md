@@ -1,6 +1,6 @@
 # har-explore
 
-从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体、粒子）。支持 **Cocos Creator**、**Pragmatic Play**、**Slotmill** 三种引擎的自动识别。
+从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体、粒子、音频）。支持 **Cocos Creator**、**Pragmatic Play**、**Slotmill** 三种引擎的自动识别。
 
 ## 结构
 
@@ -42,6 +42,8 @@ npm run spine -- samples/play.godeebxp.com.har --names symbol_08 --layout bare -
 npm run font -- samples/play.godeebxp.com.har --name countup_01 --out dist/font-export
 
 npm run particle -- samples/play.godeebxp.com.har --out dist/har-particles
+
+npm run audio -- samples/play.godeebxp.com.har --out dist/har-audio
 
 npm run build -- samples/game.har --out dist/texture-viewer
 
