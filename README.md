@@ -2,6 +2,8 @@
 
 从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体、粒子、音频）。支持 **Cocos Creator**、**Pragmatic Play**、**Slotmill** 三种引擎的自动识别。
 
+技术说明（可分享）：[docs/资源提取与预览技术.md](docs/资源提取与预览技术.md)
+
 ## 结构
 
 ```
