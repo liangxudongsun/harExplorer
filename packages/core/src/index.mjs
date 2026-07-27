@@ -6,6 +6,13 @@ export { buildSlotmillTab } from './engines/slotmill/build-tab.mjs';
 
 export { detectCocosMajor } from './engines/cocos/detect-cocos-major.mjs';
 export {
+  readCdnCache,
+  writeCdnCache,
+  fetchIntoCdnCache,
+  hydrateTabFromSignedUrls,
+  stableCacheRel,
+} from './engines/cocos/cdn-cache.mjs';
+export {
   decompressCocosUuid,
   decodeCocosUuid,
 } from './engines/cocos/cocos-uuid.mjs';

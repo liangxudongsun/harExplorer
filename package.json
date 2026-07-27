@@ -1,6 +1,6 @@
 {
   "name": "har-explore",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "private": true,
   "type": "module",
   "description": "HAR game asset extractor — CLI + web viewer for Cocos 2.x/3.x / Pragmatic / Slotmill",
@@ -12,6 +12,7 @@
     "build:catalog": "node packages/cli/src/build-texture-viewer-catalog.mjs",
     "build:catalog:enrich": "node packages/cli/src/build-texture-viewer-catalog.mjs --enrich",
     "enrich:atlas-frames": "node scripts/enrich-catalog-atlas-frames.mjs",
+    "hydrate:cdn": "node scripts/hydrate-cdn-cache.mjs",
     "build": "node packages/cli/src/build-texture-viewer.mjs",
     "serve": "node packages/web/server.mjs",
     "spine": "node packages/cli/src/extract-cocos-spine-packs.mjs",

@@ -7,6 +7,7 @@ import { extractBitmapFonts, matchAllFontTextures, fntConfigToBmFont, glyphPrevi
 import { writeParticlePacks } from './extract-particles.mjs';
 import { writeAudioPacks } from './extract-audio.mjs';
 import { detectCocosMajor } from './detect-cocos-major.mjs';
+import { readCdnCache, writeCdnCache } from './cdn-cache.mjs';
 
 const TEXTURE_EXT = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif',
@@ -362,10 +363,13 @@ export function buildCocosTab(harPath, outDir, src) {
   const pageTitle = har.log?.pages?.[0]?.title ?? '';
   const assetsDir = join(outDir, 'embedded', src.id);
   mkdirSync(assetsDir, { recursive: true });
+  const cdnCacheRoot = join(outDir, 'cdn-cache');
+  mkdirSync(cdnCacheRoot, { recursive: true });
 
   const urlMap = new Map();
   let idx = 0;
   let vramBytes = 0;
+  let fromCdnCache = 0;
 
   for (const entry of entries) {
     const url = entry.request?.url ?? '';
@@ -377,8 +381,22 @@ export function buildCocosTab(harPath, outDir, src) {
 
     const size = getBodySize(entry);
     const path = pathFromUrl(url);
-    const buf = getImageBuffer(entry);
-    const canEmbed = !!(buf && mime.toLowerCase().startsWith('image/'));
+    let buf = getImageBuffer(entry);
+    // HAR 无 body 时，尝试按去 sign 的路径读本地 CDN 缓存
+    if (!buf) {
+      const cached = readCdnCache(cdnCacheRoot, url);
+      if (cached) {
+        buf = cached;
+        fromCdnCache += 1;
+      }
+    }
+    const mimeLow = mime.toLowerCase();
+    const canEmbed = !!(
+      buf &&
+      (mimeLow.startsWith('image/') ||
+        (buf[0] === 0x89 && buf[1] === 0x50) ||
+        (buf[0] === 0xff && buf[1] === 0xd8))
+    );
     const prev = urlMap.get(url);
     // 同 URL 可能先出现「无 body 但 Content-Length 有值」的缓存条目，
     // 再出现带 base64 的条目；优先保留能嵌入的，避免卡在 remote。
@@ -396,10 +414,12 @@ export function buildCocosTab(harPath, outDir, src) {
     let srcType = 'remote';
 
     if (canEmbed) {
-      const outFile = `${safeId(url, idx)}${ext}`;
+      const outFile = `${safeId(url, idx)}${ext === '(no-ext)' ? '.png' : ext}`;
       writeFileSync(join(assetsDir, outFile), buf);
       srcPath = `embedded/${src.id}/${outFile}`;
       srcType = 'embedded';
+      // 持久化到 CDN 缓存（去 sign），签名过期后仍可复用
+      writeCdnCache(cdnCacheRoot, url, buf);
     }
 
     urlMap.set(url, {
@@ -465,6 +485,7 @@ export function buildCocosTab(harPath, outDir, src) {
       fontCount: fontManifest.length,
       particleCount: particleManifest.length,
       audioCount: audioManifest.length,
+      fromCdnCache,
       ...tagged.meta,
     },
     textures: tagged.textures,

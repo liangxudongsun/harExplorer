@@ -19,7 +19,7 @@ import {
 } from 'fs';
 import { join, extname, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { buildSlotmillTab, buildPragmaticTab, buildCocosTab, detectEngine } from '../core/src/index.mjs';
+import { buildSlotmillTab, buildPragmaticTab, buildCocosTab, detectEngine, hydrateTabFromSignedUrls } from '../core/src/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -132,6 +132,23 @@ async function handleUpload(req, res) {
     const tab = build(harPath, ROOT, src);
     tab.engineDetection = detection;
 
+    // 签名 URL 未过期时，把仍为 remote 的贴图拉进本地 cdn-cache
+    if (detection.engine === 'cocos' && typeof hydrateTabFromSignedUrls === 'function') {
+      try {
+        const hyd = await hydrateTabFromSignedUrls(tab, ROOT, id, {
+          concurrency: 8,
+          timeoutMs: 15000,
+        });
+        if (hyd.fetched || hyd.failed) {
+          console.log(
+            `CDN hydrate: fetched=${hyd.fetched} failed=${hyd.failed} pending=${hyd.pending}`
+          );
+        }
+      } catch (e) {
+        console.warn('CDN hydrate skipped:', e?.message ?? e);
+      }
+    }
+
     catalog.tabs.push(tab);
     catalog.builtAt = new Date().toISOString();
     writeFileSync(join(ROOT, 'catalog.json'), JSON.stringify(catalog, null, 2), 'utf8');
@@ -141,7 +158,8 @@ async function handleUpload(req, res) {
     console.log(
       `Upload: ${rawName} → ${detection.engine}` +
         (detection.cocosMajor != null ? `/${detection.cocosMajor}.x` : '') +
-        ` (tab ${id}, ${tab.meta?.total ?? 0} textures)`
+        ` (tab ${id}, ${tab.meta?.total ?? 0} textures, ` +
+        `embedded=${tab.meta?.embedded ?? 0})`
     );
   } catch (err) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
