@@ -6,6 +6,7 @@ import { parseAtlasPages, normalizeSkeletonJsonForRuntime } from './spine-extrac
 import { extractBitmapFonts, matchAllFontTextures, fntConfigToBmFont, glyphPreview, fontAtlasExtent } from './bitmap-font.mjs';
 import { writeParticlePacks } from './extract-particles.mjs';
 import { writeAudioPacks } from './extract-audio.mjs';
+import { detectCocosMajor } from './detect-cocos-major.mjs';
 
 const TEXTURE_EXT = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif',
@@ -123,8 +124,13 @@ function imageDimensions(buf, ext) {
 
 function classifyCocosPath(path) {
   const p = path.toLowerCase();
-  const bundle = p.match(/\/assets\/([^/]+)\/native\//)?.[1];
+  // Creator 3.x asset bundle
+  const bundle = p.match(/\/assets\/([^/]+)\/(?:native|import)\//)?.[1];
   if (bundle) return bundle;
+  // Creator 2.x web build
+  if (p.includes('/res/raw-assets/')) return 'raw-assets';
+  if (p.includes('/res/import/')) return 'import';
+  if (p.includes('/raw-assets/')) return 'raw-assets';
   if (p.includes('/slotframework/')) return 'slotFramework';
   if (p.includes('/public/')) return 'public';
   if (p.includes('/images/logos/')) return 'logo';
@@ -422,6 +428,13 @@ export function buildCocosTab(harPath, outDir, src) {
   const particleManifest = writeParticlePacks(outDir, src.id, entries);
   const audioManifest = writeAudioPacks(outDir, src.id, entries);
   const resourceTypes = [...new Set(tagged.textures.map((t) => t.resourceType))].sort();
+  const majorInfo = detectCocosMajor(entries);
+  const engineLabel =
+    majorInfo.major === 2
+      ? 'Cocos Creator 2.x'
+      : majorInfo.major === 3
+        ? 'Cocos Creator 3.x'
+        : 'Cocos Creator';
 
   return {
     id: src.id,
@@ -431,7 +444,9 @@ export function buildCocosTab(harPath, outDir, src) {
       pageTitle,
       gameName: gameNameFromTitle(pageTitle),
       builtAt: new Date().toISOString(),
-      engine: 'Cocos Creator',
+      engine: engineLabel,
+      cocosMajor: majorInfo.major,
+      cocosMajorSignals: majorInfo.signals,
       total: tagged.textures.length,
       embedded: tagged.textures.filter((t) => t.srcType === 'embedded').length,
       remote: tagged.textures.filter((t) => t.srcType === 'remote').length,

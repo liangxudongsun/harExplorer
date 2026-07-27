@@ -5,7 +5,11 @@
  * Detection is heuristic and scored: every entry contributes hits to the
  * engines it matches (by URL, then by a light body sniff for a few scripts).
  * The highest score wins; 'slotmill' is the generic texture-dump fallback.
+ *
+ * When engine is 'cocos', also returns cocosMajor: 2 | 3 | null.
  */
+
+import { detectCocosMajor } from './engines/cocos/detect-cocos-major.mjs';
 
 function bodyText(entry) {
   const c = entry.response?.content;
@@ -43,6 +47,10 @@ export function detectEngine(entries, pageTitle = '') {
 
     if (/\/import\/[0-9a-f]{2}\//.test(url)) score.cocos += 3;
     if (/\/assets\/[^/]+\/native\//.test(url)) score.cocos += 3;
+    // Creator 2.x web 构建常见布局
+    if (/\/res\/raw-assets\//.test(url)) score.cocos += 4;
+    if (/\/res\/import\//.test(url)) score.cocos += 3;
+    if (/cocos2d-js|cocos2d-jsb/.test(url)) score.cocos += 4;
     if (/cocos|creator|\bccc\b/.test(url)) score.cocos += 2;
     if (/\/spine\//.test(url)) score.cocos += 1;
 
@@ -58,7 +66,11 @@ export function detectEngine(entries, pageTitle = '') {
       if (text) {
         bodySniffs++;
         const head = text.slice(0, 20000);
-        if (/cc\._RF\.push|window\.CCClass|cc\.Class|"__type__"|cc\.game|cocos2d/.test(head)) {
+        if (
+          /cc\._RF\.push|window\.CCClass|cc\.Class|"__type__"|cc\.game|cocos2d|cc\.AssetLibrary/.test(
+            head
+          )
+        ) {
           score.cocos += 3;
         }
         if (/UHTEventBroker|PIXI\.|pragmatic|gameService/.test(head)) {
@@ -72,6 +84,28 @@ export function detectEngine(entries, pageTitle = '') {
   const ranked = Object.entries(score).sort((a, b) => b[1] - a[1]);
   const [engine, top] = ranked[0];
   // No meaningful signal → generic dump builder.
-  if (top === 0) return { engine: 'slotmill', score, confident: false };
-  return { engine, score, confident: top >= 5 };
+  if (top === 0) {
+    return {
+      engine: 'slotmill',
+      score,
+      confident: false,
+      cocosMajor: null,
+      cocosMajorDetail: null,
+    };
+  }
+
+  let cocosMajor = null;
+  let cocosMajorDetail = null;
+  if (engine === 'cocos') {
+    cocosMajorDetail = detectCocosMajor(entries);
+    cocosMajor = cocosMajorDetail.major;
+  }
+
+  return {
+    engine,
+    score,
+    confident: top >= 5,
+    cocosMajor,
+    cocosMajorDetail,
+  };
 }

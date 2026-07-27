@@ -4,6 +4,12 @@ export { buildCocosTab } from './engines/cocos/build-tab.mjs';
 export { buildPragmaticTab } from './engines/pragmatic/build-tab.mjs';
 export { buildSlotmillTab } from './engines/slotmill/build-tab.mjs';
 
+export { detectCocosMajor } from './engines/cocos/detect-cocos-major.mjs';
+export {
+  decompressCocosUuid,
+  decodeCocosUuid,
+} from './engines/cocos/cocos-uuid.mjs';
+
 export { scanCocosHar, tagCocosTextures } from './engines/cocos/parse-import.mjs';
 export {
   extractCocosAnimationPacks,

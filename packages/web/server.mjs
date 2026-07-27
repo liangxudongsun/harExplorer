@@ -138,7 +138,11 @@ async function handleUpload(req, res) {
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, tab, detection }));
-    console.log(`Upload: ${rawName} → ${detection.engine} (tab ${id}, ${tab.meta?.total ?? 0} textures)`);
+    console.log(
+      `Upload: ${rawName} → ${detection.engine}` +
+        (detection.cocosMajor != null ? `/${detection.cocosMajor}.x` : '') +
+        ` (tab ${id}, ${tab.meta?.total ?? 0} textures)`
+    );
   } catch (err) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: String(err.message ?? err) }));
