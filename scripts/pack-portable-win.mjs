@@ -53,15 +53,29 @@ const SKIP_DIRS = new Set([
 ]);
 const SKIP_FILES = /\.(har|zip)$/i;
 
-/** Pre-bundled demo tabs (雷神2 + 塞特2). */
-const PRESET_HARS = [
-  { src: join(ROOT, 'samples', 'gameweb3.rsg-games.com.har'), name: 'gameweb3.rsg-games.com.har', label: '雷神2' },
-  { src: join(ROOT, 'samples', 'play.godeebxp.com.har'), name: 'play.godeebxp.com.har', label: '塞特2' },
+/** Pre-bundled demo tabs (雷神2 + 赏金猎人). */
+const PRESET_TABS = [
+  {
+    id: 'power-of-thor2',
+    label: '雷神2',
+    type: 'cocos',
+    har: 'samples/gameweb3.rsg-games.com.har',
+    src: join(ROOT, 'samples', 'gameweb3.rsg-games.com.har'),
+    name: 'gameweb3.rsg-games.com.har',
+  },
+  {
+    id: 'bounty-hunter',
+    label: '赏金猎人',
+    type: 'cocos',
+    har: 'samples/gameweb3.rsg-games.com2.har',
+    src: join(ROOT, 'samples', 'gameweb3.rsg-games.com2.har'),
+    name: 'gameweb3.rsg-games.com2.har',
+  },
 ];
 
 function stagePresetSamples(dest) {
   mkdirSync(dest, { recursive: true });
-  for (const preset of PRESET_HARS) {
+  for (const preset of PRESET_TABS) {
     if (!existsSync(preset.src)) {
       throw new Error(`Preset HAR missing (${preset.label}): ${preset.src}`);
     }
@@ -70,10 +84,25 @@ function stagePresetSamples(dest) {
   writeFileSync(
     join(dest, 'README.txt'),
     [
-      '绿色版已预置：雷神2、塞特2',
+      '绿色版已预置：雷神2、赏金猎人',
       '',
       '可继续放入更多 .har，运行「构建目录.bat」或在网页里拖拽上传。',
     ].join('\n'),
+    'utf8',
+  );
+}
+
+/** Portable catalog only lists preset tabs (avoid missing HAR like 塞特2). */
+function writePresetCatalogSources(appDir) {
+  const sources = PRESET_TABS.map(({ id, label, type, har }) => ({
+    id,
+    label,
+    type,
+    har,
+  }));
+  writeFileSync(
+    join(appDir, 'packages', 'web', 'catalog-sources.json'),
+    `${JSON.stringify(sources, null, 2)}\n`,
     'utf8',
   );
 }
@@ -126,9 +155,10 @@ async function main() {
   const appDir = join(STAGING, 'app');
   copyApp(ROOT, appDir);
   stagePresetSamples(join(appDir, 'samples'));
+  writePresetCatalogSources(appDir);
 
   const nodeExe = join(STAGING, 'node', 'node.exe');
-  console.log('Building preset catalog (雷神2 + 塞特2) …');
+  console.log('Building preset catalog (雷神2 + 赏金猎人) …');
   execSync(`"${nodeExe}" packages/cli/src/build-texture-viewer-catalog.mjs`, {
     cwd: appDir,
     stdio: 'inherit',
@@ -201,7 +231,7 @@ async function main() {
       '无需安装 Node.js，解压即用。',
       '',
       '启动查看器.bat',
-      '  打开 http://127.0.0.1:8765/ ，已预置雷神2、塞特2',
+      '  打开 http://127.0.0.1:8765/ ，已预置雷神2、赏金猎人',
       '',
       '构建目录.bat',
       '  从 app\\samples\\ 里的 HAR 重新生成 catalog（可选）',

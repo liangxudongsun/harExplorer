@@ -77,6 +77,20 @@ const BAKE_PIPELINES = {
     supersample: 1,
     filter: 'linear',
   },
+  /**
+   * Keep user scale (no fit-down). Canvas clamped to maxSize; overflow is cropped
+   * around the animation bounds center (WebGL viewport clips naturally).
+   */
+  'crop-canvas': {
+    label: '固定画布裁切',
+    hint: '不缩小适配：保持缩放，超出 2048 的部分从中心裁掉',
+    scaleMul: 1,
+    maxSize: 2048,
+    composite: 'dual',
+    supersample: 1,
+    filter: 'linear',
+    crop: true,
+  },
 };
 
 function resolvePipeline(id, userScale) {
@@ -91,6 +105,7 @@ function resolvePipeline(id, userScale) {
     composite: p.composite,
     supersample: p.supersample,
     filter: p.filter,
+    crop: !!p.crop,
   };
 }
 
@@ -297,14 +312,27 @@ async function spineBakeFrames(opts, onProgress) {
 
   function layoutForBounds(b) {
     let s = pipe.scale;
-    if (Math.max(b.w, b.h) * s > pipe.maxSize) s = pipe.maxSize / Math.max(b.w, b.h);
-    const outW = Math.max(2, Math.round(b.w * s));
-    const outH = Math.max(2, Math.round(b.h * s));
+    const fullW = Math.max(2, Math.round(b.w * s));
+    const fullH = Math.max(2, Math.round(b.h * s));
+    let outW;
+    let outH;
+    let cropped = false;
+    if (pipe.crop) {
+      // Keep scale; clamp canvas per-axis so overflow is cropped (not fitted).
+      outW = Math.max(2, Math.min(fullW, pipe.maxSize));
+      outH = Math.max(2, Math.min(fullH, pipe.maxSize));
+      cropped = outW < fullW || outH < fullH;
+    } else {
+      if (Math.max(b.w, b.h) * s > pipe.maxSize) s = pipe.maxSize / Math.max(b.w, b.h);
+      outW = Math.max(2, Math.round(b.w * s));
+      outH = Math.max(2, Math.round(b.h * s));
+    }
     const ss = pipe.supersample;
     const renderW = Math.max(2, Math.round(outW * ss));
     const renderH = Math.max(2, Math.round(outH * ss));
     const renderZoom = s * ss;
-    return { s, outW, outH, renderW, renderH, renderZoom, ss };
+    // Camera still centers on full bounds; smaller canvas → edge crop.
+    return { s, outW, outH, renderW, renderH, renderZoom, ss, cropped, fullW, fullH };
   }
 
   const out = [];
@@ -314,7 +342,8 @@ async function spineBakeFrames(opts, onProgress) {
       out.push({ name, error: 'empty bounds', frames: [] });
       continue;
     }
-    const { s, outW, outH, renderW, renderH, renderZoom, ss } = layoutForBounds(b);
+    const { s, outW, outH, renderW, renderH, renderZoom, ss, cropped, fullW, fullH } =
+      layoutForBounds(b);
     canvas.width = renderW;
     canvas.height = renderH;
     workCanvas.width = renderW;
@@ -364,6 +393,9 @@ async function spineBakeFrames(opts, onProgress) {
       renderWidth: renderW,
       renderHeight: renderH,
       supersample: ss,
+      cropped,
+      fullWidth: fullW,
+      fullHeight: fullH,
       origin: { x: +b.x.toFixed(2), y: +b.y.toFixed(2) },
       frames,
     });
@@ -378,6 +410,7 @@ async function spineBakeFrames(opts, onProgress) {
       composite: pipe.composite,
       filter: pipe.filter,
       maxSize: pipe.maxSize,
+      crop: pipe.crop,
     },
     animations: out,
     missingRegions: [...missing],

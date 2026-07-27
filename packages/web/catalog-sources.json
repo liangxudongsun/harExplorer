@@ -6,6 +6,12 @@
     "har": "samples/gameweb3.rsg-games.com.har"
   },
   {
+    "id": "bounty-hunter",
+    "label": "赏金猎人",
+    "type": "cocos",
+    "har": "samples/gameweb3.rsg-games.com2.har"
+  },
+  {
     "id": "golden-seth",
     "label": "塞特2",
     "type": "cocos",

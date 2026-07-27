@@ -13,7 +13,7 @@
  * Usage:
  *   node spine-to-frames.mjs <packDir> [--out dir] [--fps 30] [--scale 1]
  *                            [--anim name[,name...]] [--max-size 2048]
- *                            [--pipeline standard|high-res|max-canvas|direct-alpha|supersample-2x|nearest|precise-alpha]
+ *                            [--pipeline standard|high-res|max-canvas|crop-canvas|direct-alpha|supersample-2x|nearest|precise-alpha]
  */
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'fs';
 import { join, dirname, basename, resolve } from 'path';

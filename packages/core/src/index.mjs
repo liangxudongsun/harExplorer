@@ -9,6 +9,11 @@ export {
   decompressCocosUuid,
   decodeCocosUuid,
 } from './engines/cocos/cocos-uuid.mjs';
+export {
+  detectFramesFromRgba,
+  detectAtlasFramesFromImage,
+  shouldDetectStaticAtlas,
+} from './engines/cocos/detect-atlas-from-image.mjs';
 
 export { scanCocosHar, tagCocosTextures } from './engines/cocos/parse-import.mjs';
 export {
