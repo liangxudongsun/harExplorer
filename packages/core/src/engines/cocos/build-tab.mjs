@@ -377,18 +377,25 @@ export function buildCocosTab(harPath, outDir, src) {
 
     const size = getBodySize(entry);
     const path = pathFromUrl(url);
+    const buf = getImageBuffer(entry);
+    const canEmbed = !!(buf && mime.toLowerCase().startsWith('image/'));
     const prev = urlMap.get(url);
-    if (prev && prev.size >= size) continue;
+    // 同 URL 可能先出现「无 body 但 Content-Length 有值」的缓存条目，
+    // 再出现带 base64 的条目；优先保留能嵌入的，避免卡在 remote。
+    if (prev) {
+      const prevEmbed = prev.srcType === 'embedded';
+      if (prevEmbed && !canEmbed) continue;
+      if (prevEmbed === canEmbed && prev.size >= size) continue;
+    }
 
     const fileName = basename(path.split('?')[0]);
-    const buf = getImageBuffer(entry);
     const dim = imageDimensions(buf, ext);
     const texVram = dim ? dim.w * dim.h * 4 : 0;
 
     let srcPath = url;
     let srcType = 'remote';
 
-    if (buf && mime.startsWith('image/')) {
+    if (canEmbed) {
       const outFile = `${safeId(url, idx)}${ext}`;
       writeFileSync(join(assetsDir, outFile), buf);
       srcPath = `embedded/${src.id}/${outFile}`;
