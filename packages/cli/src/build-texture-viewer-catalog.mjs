@@ -2,19 +2,22 @@
 /**
  * Build multi-tab texture viewer catalog from one or more HAR files.
  * Usage:
- *   node tools/scripts/build-texture-viewer-catalog.mjs [--out dir]
+ *   node packages/cli/src/build-texture-viewer-catalog.mjs [--out dir] [--enrich]
  *
- * Reads tools/texture-viewer/catalog-sources.json for tab definitions.
+ * Reads packages/web/catalog-sources.json for tab definitions.
+ * --enrich：构建后跑 SpriteFrame / alpha 连通域补全图集帧（需 sharp）。
  */
 import { readFileSync, writeFileSync, mkdirSync, cpSync, existsSync } from 'fs';
-import { dirname, join, basename, extname } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { spawnSync } from 'child_process';
 import { buildSlotmillTab, buildPragmaticTab, buildCocosTab } from '../../core/src/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const outIdx = args.indexOf('--out');
 const OUT_DIR = outIdx >= 0 ? args[outIdx + 1] : join(process.cwd(), 'dist', 'texture-viewer');
+const doEnrich = args.includes('--enrich');
 const sourcesPath = join(__dirname, '..', '..', 'web', 'catalog-sources.json');
 
 const sources = JSON.parse(readFileSync(sourcesPath, 'utf8'));
@@ -60,8 +63,34 @@ if (existsSync(particlePlayerSrc)) {
   cpSync(particlePlayerSrc, join(OUT_DIR, 'particle-player'), { recursive: true });
 }
 
-console.log(JSON.stringify({
-  ok: true,
-  out: OUT_DIR,
-  tabs: tabs.map((t) => ({ id: t.id, label: t.label, textures: t.meta.total })),
-}, null, 2));
+if (doEnrich) {
+  const enrichScript = join(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    'scripts',
+    'enrich-catalog-atlas-frames.mjs'
+  );
+  console.log('Enriching atlas frames (SpriteFrame + alpha CC)…');
+  const r = spawnSync(process.execPath, [enrichScript, '--out', OUT_DIR], {
+    cwd: process.cwd(),
+    stdio: 'inherit',
+  });
+  if (r.status !== 0) {
+    console.warn('enrich:atlas-frames failed; catalog still written without alpha frames');
+  }
+}
+
+console.log(
+  JSON.stringify(
+    {
+      ok: true,
+      out: OUT_DIR,
+      enrich: doEnrich,
+      tabs: tabs.map((t) => ({ id: t.id, label: t.label, textures: t.meta.total })),
+    },
+    null,
+    2
+  )
+);

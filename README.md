@@ -28,7 +28,9 @@ copy D:\path\to\play.godeebxp.com.har samples\
 
 # 3. 构建 viewer
 npm run build:catalog
-# 可选：用 HAR SpriteFrame + 透明连通域补全图集帧
+# 构建并补全图集帧（SpriteFrame + 透明连通域，较慢）
+npm run build:catalog:enrich
+# 或对已有 catalog 单独 enrich
 npm run enrich:atlas-frames
 
 # 4. 启动 Web（支持拖拽上传新 HAR）
