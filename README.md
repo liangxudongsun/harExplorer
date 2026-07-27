@@ -1,6 +1,6 @@
 # har-explore
 
-从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体、粒子、音频）。支持 **Cocos Creator**、**Pragmatic Play**、**Slotmill** 三种引擎的自动识别。
+从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体、粒子、音频）。支持 **Cocos Creator 2.x / 3.x**、**Pragmatic Play**、**Slotmill** 的自动识别。
 
 技术说明（可分享）：[docs/资源提取与预览技术.md](docs/资源提取与预览技术.md)
 
@@ -52,21 +52,22 @@ npm run build -- samples/game.har --out dist/texture-viewer
 # Spine 转序列帧（透明 PNG，默认 30fps，自动匹配 3.7/3.8 runtime）
 npm run bake -- dist/spine-export/symbol_08 --fps 30 --out dist/frames/symbol_08
 npm run bake -- dist/texture-viewer/animations/golden-seth/f_times --anim loop_2 --scale 2
+# 不适配：保持缩放，超出画布从中心裁掉
+npm run bake -- dist/texture-viewer/animations/gameweb3.rsg-games.com/ultrawin --scale 1 --pipeline crop-canvas
 ```
 
 ## Windows 绿色版（内置 Node，解压即用）
 
 ```bash
-# 内置 Node + 预置雷神2、塞特2（约 220MB zip）
+# 内置 Node + 预置雷神2、赏金猎人（约 230MB zip）
 npm run pack
 
 # 含 CLI 烘焙 Playwright 浏览器（体积更大）
 npm run pack:full
 ```
-
 产物：`release/harExplore-portable-win-x64.zip`
 
-解压后双击 **启动查看器.bat** → http://127.0.0.1:8765/ ，打开即可看到 **雷神2**、**塞特2** 两个标签页。
+解压后双击 **启动查看器.bat** → http://127.0.0.1:8765/ ，打开即可看到 **雷神2**、**赏金猎人** 两个标签页。
 
 ## 从 perlab 迁移
 

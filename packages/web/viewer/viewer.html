@@ -527,6 +527,7 @@
               <option value="standard">标准（当前默认）</option>
               <option value="high-res">高分辨率 2×</option>
               <option value="max-canvas">超大画布 8192</option>
+              <option value="crop-canvas">固定画布裁切（不适配）</option>
               <option value="direct-alpha">直通透明（无双通道）</option>
               <option value="supersample-2x">超采样 2× 降采样</option>
               <option value="nearest">最近邻滤镜</option>
@@ -696,6 +697,14 @@
 
     const ENGINE_LABELS = { cocos: 'Cocos Creator', pragmatic: 'Pragmatic Play', slotmill: 'Slotmill' };
 
+    function cocosEngineLabel(detection, meta) {
+      const major = detection?.cocosMajor ?? meta?.cocosMajor;
+      if (major === 2) return 'Cocos Creator 2.x';
+      if (major === 3) return 'Cocos Creator 3.x';
+      if (meta?.engine) return meta.engine;
+      return ENGINE_LABELS.cocos;
+    }
+
     async function uploadHar(file) {
       if (!file) return;
       const btn = document.getElementById('add-har-btn');
@@ -713,7 +722,10 @@
         const existing = tabs.findIndex((t) => t.id === tab.id);
         if (existing >= 0) tabs.splice(existing, 1, tab);
         else tabs.push(tab);
-        const eng = ENGINE_LABELS[data.detection?.engine] ?? data.detection?.engine ?? '?';
+        const eng =
+          data.detection?.engine === 'cocos'
+            ? cocosEngineLabel(data.detection, tab.meta)
+            : (ENGINE_LABELS[data.detection?.engine] ?? data.detection?.engine ?? '?');
         const conf = data.detection?.confident ? '' : '（低置信度）';
         setUploadHint(`已加载 ${tab.label} · 引擎 ${eng}${conf} · ${tab.meta?.total ?? 0} 纹理`, 'ok');
         activateTab(tab);
@@ -795,6 +807,7 @@
 
     function updateSubtitle() {
       const parts = [
+        meta.engine || null,
         meta.harPath,
         `${meta.total ?? textures.length} 张纹理`,
         meta.embedded != null ? `内嵌 ${meta.embedded}` : null,

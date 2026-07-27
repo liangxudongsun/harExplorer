@@ -6,6 +6,9 @@
  */
 
 import { detectSequenceGroups, parseSpineAtlasText } from './parse-import.mjs';
+import { decodeCocosUuid } from './cocos-uuid.mjs';
+
+export { decodeCocosUuid };
 
 const SPINE_BLOB_RE =
   /[\[,](\d+,)?"([^"\\]+)","(?:\\r)?\\n([^"\\]+?)(?:\\r)?\\nsize:\s*(\d+)\s*,\s*(\d+)/g;
@@ -169,6 +172,64 @@ export function parseAtlasPages(atlasText) {
 }
 
 /**
+ * Parse `["uuid","uuid"]` (or compressed 22/23-char forms) starting at `[`.
+ * Returns standard hyphenated UUIDs in page order.
+ */
+export function parseTextureUuidArray(text, bracketIdx) {
+  if (bracketIdx < 0 || text[bracketIdx] !== '[') return [];
+  let depth = 0;
+  let end = -1;
+  for (let i = bracketIdx; i < Math.min(text.length, bracketIdx + 4000); i++) {
+    const c = text[i];
+    if (c === '[') depth++;
+    if (c === ']') {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) return [];
+  const slice = text.slice(bracketIdx, end + 1);
+  const out = [];
+  const re = /"([^"]+)"/g;
+  let m;
+  while ((m = re.exec(slice))) {
+    const raw = m[1].split('@')[0];
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(raw)) {
+      out.push(raw.toLowerCase());
+    } else {
+      const decoded = decodeCocosUuid(raw);
+      if (decoded && /^[0-9a-f]{8}-/i.test(decoded)) {
+        out.push(decoded.toLowerCase());
+      }
+    }
+  }
+  return out;
+}
+
+function findTextureByUuid(textures, uuid) {
+  if (!uuid) return null;
+  const low = String(uuid).toLowerCase();
+  const short = low.replace(/-/g, '');
+  return (
+    textures.find((t) => {
+      const file = String(t.fileName ?? '').toLowerCase();
+      const url = String(t.url ?? '').toLowerCase();
+      const src = String(t.src ?? '').toLowerCase();
+      return (
+        file.startsWith(low) ||
+        file.includes(low) ||
+        url.includes(low) ||
+        src.includes(low) ||
+        file.replace(/-/g, '').includes(short.slice(0, 16))
+      );
+    }) ?? null
+  );
+}
+
+/**
  * Cocos Creator exports skins as `{ "default": { slot: {...} } }`.
  * Spine 3.8 Runtime expects `[{ name, attachments }]`.
  */
@@ -252,6 +313,11 @@ export function extractAllSpineBlobs(text, sourceUrl) {
     );
     const atlasMeta = parseSpineAtlasText(atlasRaw);
     const atlasPages = parseAtlasPages(atlasText);
+    // Cocos SkeletonData：atlas 后紧跟贴图 UUID 数组（与 atlas page 顺序对齐）
+    const textureUuids =
+      texArrayStart >= 0
+        ? parseTextureUuidArray(text, texArrayStart + 2)
+        : [];
 
     blobs.push({
       name,
@@ -259,6 +325,7 @@ export function extractAllSpineBlobs(text, sourceUrl) {
       atlasText,
       atlasMeta,
       atlasPages,
+      textureUuids,
       skeletonJson,
       index: m.index,
       sourceUrl,
@@ -269,35 +336,56 @@ export function extractAllSpineBlobs(text, sourceUrl) {
   return blobs;
 }
 
-export function matchTexturesToAtlasPages(atlasPages, textures, usedUrls = new Set()) {
+/**
+ * Bind atlas pages to HAR textures.
+ * Prefer Cocos import UUID (page-aligned); fall back to exact WxH with
+ * **largest** byte size (dense Spine atlases beat sparse UI sheets).
+ *
+ * @param {Array<{page:string,width:number,height:number}>} atlasPages
+ * @param {object[]} textures
+ * @param {Set<string>} [usedUrls]
+ * @param {string[]} [textureUuids] page-aligned UUIDs from SkeletonData
+ */
+export function matchTexturesToAtlasPages(
+  atlasPages,
+  textures,
+  usedUrls = new Set(),
+  textureUuids = [],
+) {
   const matched = {};
   const localUsed = new Set(usedUrls);
 
-  for (const page of atlasPages) {
-    const dimKey = `${page.width}x${page.height}`;
-    let best = null;
-    let bestScore = Infinity;
-    let bestUsed = null;
-    let bestUsedScore = Infinity;
+  for (let pi = 0; pi < atlasPages.length; pi++) {
+    const page = atlasPages[pi];
+    const uuid = textureUuids[pi] ?? null;
+    const uuidHit = uuid ? findTextureByUuid(textures, uuid) : null;
+    let best = uuidHit;
 
-    for (const tex of textures) {
-      if (!tex.width || !tex.height) continue;
-      if (`${tex.width}x${tex.height}` !== dimKey) continue;
-      const score = Math.abs(tex.size ?? 0 - 1000000);
-      if (localUsed.has(tex.url)) {
-        // Skeletons in the same bundle often share atlas pages, so a texture
-        // already claimed by another pack is still a valid (fallback) match.
-        if (score < bestUsedScore) {
-          bestUsedScore = score;
-          bestUsed = tex;
+    if (!best) {
+      const dimKey = `${page.width}x${page.height}`;
+      let bestScore = -Infinity;
+      let bestUsed = null;
+      let bestUsedScore = -Infinity;
+
+      for (const tex of textures) {
+        if (!tex.width || !tex.height) continue;
+        if (`${tex.width}x${tex.height}` !== dimKey) continue;
+        // Prefer denser (larger) files — 2048² UI bg often shares size with
+        // real Spine pages but is much smaller when sparsely packed.
+        const score = Number(tex.size ?? 0);
+        if (localUsed.has(tex.url)) {
+          if (score > bestUsedScore) {
+            bestUsedScore = score;
+            bestUsed = tex;
+          }
+        } else if (score > bestScore) {
+          bestScore = score;
+          best = tex;
         }
-      } else if (score < bestScore) {
-        bestScore = score;
-        best = tex;
       }
+      if (!best && bestUsed) best = bestUsed;
     }
 
-    best = best ?? bestUsed;
     if (best) {
       localUsed.add(best.url);
       matched[page.page] = {
@@ -307,6 +395,8 @@ export function matchTexturesToAtlasPages(atlasPages, textures, usedUrls = new S
         textureSrc: best.src,
         textureUrl: best.url,
         textureFileName: best.fileName,
+        matchedBy: uuidHit ? 'uuid' : 'size',
+        textureUuid: uuid ?? null,
       };
     }
   }

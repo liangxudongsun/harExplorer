@@ -1,15 +1,16 @@
 {
   "name": "har-explore",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
-  "description": "HAR game asset extractor — CLI + web viewer for Cocos / Pragmatic / Slotmill",
+  "description": "HAR game asset extractor — CLI + web viewer for Cocos 2.x/3.x / Pragmatic / Slotmill",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "har-lab": "node packages/cli/src/har-lab.mjs",
     "build:catalog": "node packages/cli/src/build-texture-viewer-catalog.mjs",
+    "enrich:atlas-frames": "node scripts/enrich-catalog-atlas-frames.mjs",
     "build": "node packages/cli/src/build-texture-viewer.mjs",
     "serve": "node packages/web/server.mjs",
     "spine": "node packages/cli/src/extract-cocos-spine-packs.mjs",
@@ -26,5 +27,8 @@
   },
   "devDependencies": {
     "playwright": "^1.49.1"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3"
   }
 }

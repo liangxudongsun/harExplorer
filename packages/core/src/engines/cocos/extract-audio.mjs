@@ -4,6 +4,7 @@
  */
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
+import { decompressCocosUuid } from './cocos-uuid.mjs';
 
 const AUDIO_EXT = new Set(['.mp3', '.ogg', '.wav', '.m4a', '.aac']);
 const AUDIO_MIME = /^audio\//i;
@@ -19,10 +20,32 @@ function decodeBody(content) {
 }
 
 function uuidFromUrl(url) {
-  const m = String(url).match(
+  const s = String(url);
+  const dashed = s.match(
     /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
   );
-  return m ? m[1].toLowerCase() : null;
+  if (dashed) return dashed[1].toLowerCase();
+  const hex32 = s.match(/\/([0-9a-f]{32})(?:\.[a-z0-9]+)?(?:\?|$)/i);
+  if (hex32) {
+    const h = hex32[1].toLowerCase();
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  const compressed = s.match(
+    /\/([A-Za-z0-9+/_-]{22,23})(?:\.[a-z0-9]+)?(?:\?|$)/,
+  );
+  if (compressed) {
+    const decoded = decompressCocosUuid(compressed[1]);
+    if (decoded) return decoded.toLowerCase();
+  }
+  return null;
+}
+
+function isNativeAssetUrl(url) {
+  return (
+    /\/native\//.test(url) ||
+    /\/raw-assets\//.test(url) ||
+    /\/res\/raw-assets\//.test(url)
+  );
 }
 
 function safeId(name) {
@@ -49,13 +72,40 @@ function extFromUrl(url) {
   }
 }
 
-/**
- * Parse compact Creator import JSON for a single cc.AudioClip.
- * Sample:
- * [1,0,0,[["cc.AudioClip",["_name","_native","_duration"],0]],[[0,0,1,2,4]],
- *  [[0,"btm_w_major_vocal",".mp3",4.179592],-1],0,0,[],[],[]]
- */
 function parseAudioClipImport(json, url) {
+  if (!json) return null;
+
+  // CC2 / typed form
+  if (!Array.isArray(json) && typeof json === 'object') {
+    const visit = (node) => {
+      if (!node || typeof node !== 'object') return null;
+      if (Array.isArray(node)) {
+        for (const c of node) {
+          const hit = visit(c);
+          if (hit) return hit;
+        }
+        return null;
+      }
+      if (node.__type__ === 'cc.AudioClip') {
+        return {
+          name: typeof node._name === 'string' ? node._name : node.name || null,
+          nativeExt:
+            typeof node._native === 'string' ? node._native : null,
+          duration:
+            typeof node._duration === 'number' ? node._duration : null,
+          importUrl: url,
+          uuid: uuidFromUrl(url),
+        };
+      }
+      for (const v of Object.values(node)) {
+        const hit = visit(v);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return visit(json);
+  }
+
   if (!Array.isArray(json) || json.length < 6) return null;
   const classes = Array.isArray(json[3]) ? json[3] : [];
   const classIdx = classes.findIndex(
@@ -117,7 +167,7 @@ export function writeAudioPacks(outDir, tabId, entries) {
 
     if (
       uuid &&
-      (/\/native\//.test(url) || AUDIO_MIME.test(mime) || AUDIO_EXT.has(ext))
+      (isNativeAssetUrl(url) || AUDIO_MIME.test(mime) || AUDIO_EXT.has(ext))
     ) {
       const isAudio =
         AUDIO_MIME.test(mime) ||

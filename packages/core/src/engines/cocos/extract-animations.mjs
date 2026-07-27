@@ -25,7 +25,11 @@ function bodyText(entry) {
 }
 
 function bundleFromUrl(url) {
-  return url.match(/\/assets\/([^/]+)\//i)?.[1] ?? 'unknown';
+  const m3 = url.match(/\/assets\/([^/]+)\//i);
+  if (m3?.[1]) return m3[1];
+  if (/\/res\/(?:raw-assets|import)\//i.test(url)) return 'res';
+  if (/\/raw-assets\//i.test(url)) return 'raw-assets';
+  return 'unknown';
 }
 
 function extractJsonObject(text, startIdx) {
@@ -329,6 +333,7 @@ function extractSpinePacksFromText(text, sourceUrl) {
       height: blob.atlasPages[0]?.height ?? atlas.height,
       atlasText: blob.atlasText,
       atlasPages: blob.atlasPages,
+      textureUuids: blob.textureUuids ?? [],
       texturePages: {},
       regions: atlas.regions,
       regionCount: atlas.regionNames.length,
@@ -393,7 +398,7 @@ function extractSpriteAtlasPacks(text, sourceUrl) {
   ];
 }
 
-function matchTexture(pack, textures, usedUrls) {
+function matchTexture(pack, textures, usedUrls, pageTextureCache) {
   const pages =
     pack.atlasPages?.length > 0
       ? pack.atlasPages
@@ -402,13 +407,36 @@ function matchTexture(pack, textures, usedUrls) {
         : [];
 
   if (pages.length) {
-    const { matched, usedUrls: nextUsed } = matchTexturesToAtlasPages(
-      pages,
-      textures,
-      usedUrls,
-    );
-    pack.texturePages = matched;
-    const first = Object.values(matched)[0];
+    // 同名 atlas page（如多 skeleton 共用 symbol.png）强制共享同一张贴图
+    const cached = {};
+    const needMatch = [];
+    for (const page of pages) {
+      const hit = pageTextureCache.get(page.page);
+      if (hit) cached[page.page] = { ...hit };
+      else needMatch.push(page);
+    }
+    let nextUsed = usedUrls;
+    if (needMatch.length) {
+      const uuids = pack.textureUuids ?? [];
+      const uuidSlice = needMatch.map((p) => {
+        const idx = pages.findIndex((x) => x.page === p.page);
+        return uuids[idx] ?? null;
+      });
+      const { matched, usedUrls: u } = matchTexturesToAtlasPages(
+        needMatch,
+        textures,
+        usedUrls,
+        uuidSlice,
+      );
+      nextUsed = u;
+      for (const [name, info] of Object.entries(matched)) {
+        pageTextureCache.set(name, info);
+        cached[name] = info;
+      }
+    }
+    pack.texturePages = cached;
+    const firstPage = pages[0]?.page;
+    const first = (firstPage && cached[firstPage]) || Object.values(cached)[0];
     if (first) {
       pack.textureSrc = first.textureSrc;
       pack.textureUrl = first.textureUrl;
@@ -498,8 +526,9 @@ export function extractCocosAnimationPacks(entries, textures) {
 
   const all = [...spinePacks, ...spritePacks];
   let usedUrls = new Set();
+  const pageTextureCache = new Map();
   for (const pack of all) {
-    const result = matchTexture(pack, textures, usedUrls);
+    const result = matchTexture(pack, textures, usedUrls, pageTextureCache);
     usedUrls = result.usedUrls;
     pack.missingAtlasPages = (pack.atlasPages ?? [])
       .filter((p) => !pack.texturePages?.[p.page])

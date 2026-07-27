@@ -8,6 +8,7 @@ import {
   matchTexturesToAtlasPages,
   classifySpinePackType,
 } from './spine-extract.mjs';
+import { decompressCocosUuid } from './cocos-uuid.mjs';
 
 function bodyText(entry) {
   const c = entry.response?.content;
@@ -23,8 +24,11 @@ function bodyText(entry) {
 }
 
 function bundleFromUrl(url) {
-  const m = url.match(/\/assets\/([^/]+)\//i);
-  return m?.[1] ?? 'unknown';
+  const m3 = url.match(/\/assets\/([^/]+)\//i);
+  if (m3?.[1]) return m3[1];
+  if (/\/res\/(?:raw-assets|import)\//i.test(url)) return 'res';
+  if (/\/raw-assets\//i.test(url)) return 'raw-assets';
+  return 'unknown';
 }
 
 /** Parse Spine atlas text embedded in JSON (escaped newlines). */
@@ -81,36 +85,166 @@ function extractSpineFromText(text, sourceUrl) {
   return extractAllSpineBlobs(text, sourceUrl).map(spineBlobToScanEntry);
 }
 
+/**
+ * Parse SpriteFrames from a Cocos import JSON, grouped by Texture2D dependency.
+ * Supports CC3 packed trailers and CC2 `__type__: cc.SpriteFrame` content blocks.
+ * One import file often packs many atlases — must NOT merge them into one pack.
+ */
 function extractSpriteAtlasFrames(text) {
-  if (!text.includes('"rect"') || !text.includes('"name"')) return [];
+  if (!text.includes('"rect"') || !text.includes('"name"')) {
+    // CC2 may use rect arrays without the word in object form only — still need name
+    if (!/"__type__"\s*:\s*"cc\.SpriteFrame"/.test(text)) return [];
+  }
 
-  const frameRe =
-    /"name":"([^"]+)"[^}]*"rect":\{"x":(\d+),"y":(\d+),"width":(\d+),"height":(\d+)\}/g;
-  const frames = [];
+  /** @type {any[]} */
+  let sharedUuids = [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed?.[1])) sharedUuids = parsed[1];
+  } catch {
+    sharedUuids = [];
+  }
+
+  /** @type {Map<string, any[]>} key = texIdx number or texture uuid string */
+  const byTexKey = new Map();
+
+  const pushFrame = (texKey, frame) => {
+    if (texKey == null || texKey === '') return;
+    const k = String(texKey);
+    if (!byTexKey.has(k)) byTexKey.set(k, []);
+    byTexKey.get(k).push(frame);
+  };
+
+  // --- CC3 packed: object rect + meshType trailer ---
+  const startRe =
+    /\{"name":"([^"]+)","rect":\{"x":(\d+),"y":(\d+),"width":(\d+),"height":(\d+)\},"offset":\{"x":(-?[\d.]+),"y":(-?[\d.]+)\},"originalSize":\{"width":(\d+),"height":(\d+)\},"rotated":(true|false)/g;
+
   let m;
-  while ((m = frameRe.exec(text))) {
-    frames.push({
+  while ((m = startRe.exec(text))) {
+    const meshAt = text.indexOf('"meshType":', m.index + m[0].length);
+    if (meshAt < 0) continue;
+    const afterMesh = text.indexOf('}', meshAt);
+    if (afterMesh < 0) continue;
+    const after = text.slice(afterMesh + 1, afterMesh + 50);
+    const trailer = after.match(
+      /^],\[(\d+)\],(\d+),\[([^\]]*)\],\[(\d+)\](?:,\[(\d+)\])?/,
+    );
+    if (!trailer) continue;
+    const texIdx = Number(trailer[5] ?? trailer[4]);
+    if (!Number.isFinite(texIdx)) continue;
+    pushFrame(texIdx, {
       name: m[1],
       x: parseInt(m[2], 10),
       y: parseInt(m[3], 10),
       width: parseInt(m[4], 10),
       height: parseInt(m[5], 10),
+      offsetX: Number(m[6]) || 0,
+      offsetY: Number(m[7]) || 0,
+      originalWidth: parseInt(m[8], 10),
+      originalHeight: parseInt(m[9], 10),
+      rotated: m[10] === 'true',
     });
   }
-  if (frames.length < 3) return [];
 
-  const textureUuid = text.match(/["']([A-Za-z0-9+/=_-]+@6c48a)["']/)?.[1] ?? null;
-  const sequenceGroups = detectSequenceGroups(frames.map((f) => f.name));
+  // --- CC2: {"__type__":"cc.SpriteFrame","content":{...}} ---
+  if (/"__type__"\s*:\s*"cc\.SpriteFrame"/.test(text)) {
+    try {
+      const parsed = JSON.parse(text);
+      const visit = (node) => {
+        if (!node) return;
+        if (Array.isArray(node)) {
+          for (const c of node) visit(c);
+          return;
+        }
+        if (typeof node !== 'object') return;
+        if (node.__type__ === 'cc.SpriteFrame' && node.content) {
+          const c = node.content;
+          const name = String(c.name ?? '');
+          if (!name) return;
+          let x = 0;
+          let y = 0;
+          let width = 0;
+          let height = 0;
+          if (Array.isArray(c.rect) && c.rect.length >= 4) {
+            [x, y, width, height] = c.rect.map(Number);
+          } else if (c.rect && typeof c.rect === 'object') {
+            x = Number(c.rect.x) || 0;
+            y = Number(c.rect.y) || 0;
+            width = Number(c.rect.width) || 0;
+            height = Number(c.rect.height) || 0;
+          }
+          let offsetX = 0;
+          let offsetY = 0;
+          if (Array.isArray(c.offset) && c.offset.length >= 2) {
+            offsetX = Number(c.offset[0]) || 0;
+            offsetY = Number(c.offset[1]) || 0;
+          } else if (c.offset && typeof c.offset === 'object') {
+            offsetX = Number(c.offset.x) || 0;
+            offsetY = Number(c.offset.y) || 0;
+          }
+          let originalWidth = width;
+          let originalHeight = height;
+          if (Array.isArray(c.originalSize) && c.originalSize.length >= 2) {
+            originalWidth = Number(c.originalSize[0]) || width;
+            originalHeight = Number(c.originalSize[1]) || height;
+          } else if (c.originalSize && typeof c.originalSize === 'object') {
+            originalWidth = Number(c.originalSize.width) || width;
+            originalHeight = Number(c.originalSize.height) || height;
+          }
+          const rotated = c.rotated === true || c.rotated === 1 || c.rotated === '1';
+          const tex =
+            typeof c.texture === 'string'
+              ? c.texture
+              : typeof c.texture === 'number'
+                ? sharedUuids[c.texture]
+                : null;
+          pushFrame(tex ?? `name:${name}`, {
+            name,
+            x,
+            y,
+            width,
+            height,
+            offsetX,
+            offsetY,
+            originalWidth,
+            originalHeight,
+            rotated: !!rotated,
+          });
+          return;
+        }
+        for (const v of Object.values(node)) visit(v);
+      };
+      visit(parsed);
+    } catch {
+      /* ignore malformed */
+    }
+  }
 
-  return [
-    {
+  /** @type {any[]} */
+  const atlases = [];
+  for (const [texKey, frames] of byTexKey) {
+    if (!frames.length) continue;
+    const asIdx = Number(texKey);
+    const rawUuid = Number.isFinite(asIdx)
+      ? sharedUuids[asIdx] != null
+        ? String(sharedUuids[asIdx])
+        : null
+      : texKey.startsWith('name:')
+        ? null
+        : texKey;
+    const decoded = rawUuid ? decompressCocosUuid(rawUuid) : null;
+    const sequenceGroups = detectSequenceGroups(frames.map((f) => f.name));
+    atlases.push({
       frameCount: frames.length,
       frames,
       sequenceGroups,
       hasSequenceFrames: sequenceGroups.length > 0,
-      textureUuid,
-    },
-  ];
+      textureUuid: rawUuid,
+      textureUuidDecoded: decoded,
+      textureDepIndex: Number.isFinite(asIdx) ? asIdx : null,
+    });
+  }
+  return atlases;
 }
 
 function extractAnimationClips(text, sourceUrl) {
@@ -165,13 +299,26 @@ function tagTextureBySpriteAtlas(tex, atlasAssignments) {
   return atlasAssignments.get(tex.url) ?? null;
 }
 
-/** Match each sprite atlas to exactly one native texture by frame bounding box. */
+/** Match each sprite atlas pack to at most one native texture (UUID first, tight bbox fallback). */
 function assignSpriteAtlasTextures(textures, atlases, excludeUrls) {
   const assignments = new Map();
   const usedUrls = new Set(excludeUrls);
 
-  for (const atlas of atlases) {
-    if (atlas.frameCount < 3 || !atlas.frames.length) continue;
+  const uuidIndex = new Map();
+  for (const tex of textures) {
+    for (const field of [tex.fileName, tex.path, tex.src, tex.url]) {
+      const m = String(field || '').match(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+      );
+      if (m) uuidIndex.set(m[0].toLowerCase(), tex);
+    }
+  }
+
+  // Prefer larger packs first so they claim their sheet before tiny leftovers
+  const ordered = [...atlases].sort((a, b) => (b.frameCount || 0) - (a.frameCount || 0));
+
+  for (const atlas of ordered) {
+    if (!atlas.frames?.length) continue;
 
     let maxW = 0;
     let maxH = 0;
@@ -180,22 +327,53 @@ function assignSpriteAtlasTextures(textures, atlases, excludeUrls) {
       maxH = Math.max(maxH, f.y + f.height);
     }
 
+    /** @type {any} */
     let best = null;
-    let bestScore = Infinity;
-    for (const tex of textures) {
-      if (!tex.width || !tex.height || usedUrls.has(tex.url)) continue;
+    let matchHow = '';
 
-      const fits = maxW <= tex.width && maxH <= tex.height;
-      if (!fits) continue;
+    const decoded = atlas.textureUuidDecoded || decompressCocosUuid(atlas.textureUuid);
+    if (decoded && uuidIndex.has(decoded.toLowerCase())) {
+      const hit = uuidIndex.get(decoded.toLowerCase());
+      if (hit && !usedUrls.has(hit.url)) {
+        best = hit;
+        matchHow = 'uuid';
+      }
+    }
 
-      const score = Math.abs(tex.width - maxW) + Math.abs(tex.height - maxH);
-      if (score < bestScore) {
-        bestScore = score;
-        best = tex;
+    if (!best) {
+      let bestScore = Infinity;
+      let bestArea = Infinity;
+      for (const tex of textures) {
+        if (!tex.width || !tex.height || usedUrls.has(tex.url)) continue;
+        if (tex.width < maxW || tex.height < maxH) continue;
+        const score = Math.abs(tex.width - maxW) + Math.abs(tex.height - maxH);
+        const areaRatio = (tex.width * tex.height) / Math.max(1, maxW * maxH);
+        // Reject loose fits — this was attaching free_bg rects onto unrelated huge sheets
+        if (score > 320) continue;
+        if (areaRatio > 2.2 && score > 80) continue;
+        if (score < bestScore || (score === bestScore && areaRatio < bestArea)) {
+          bestScore = score;
+          bestArea = areaRatio;
+          best = tex;
+          matchHow = `bbox:${bestScore}`;
+        }
       }
     }
 
     if (!best) continue;
+
+    // Skip trivial "whole texture = one frame" packs — not useful as atlas splits
+    if (
+      atlas.frames.length === 1 &&
+      atlas.frames[0].x === 0 &&
+      atlas.frames[0].y === 0 &&
+      atlas.frames[0].width === best.width &&
+      atlas.frames[0].height === best.height &&
+      !atlas.frames[0].rotated
+    ) {
+      continue;
+    }
+
     usedUrls.add(best.url);
 
     const mainSeq = atlas.sequenceGroups[0];
@@ -206,6 +384,10 @@ function assignSpriteAtlasTextures(textures, atlases, excludeUrls) {
       sequencePrefix: mainSeq?.prefix ?? null,
       sequenceFrameCount: mainSeq?.count ?? atlas.frameCount,
       atlasBounds: `${maxW}×${maxH}`,
+      frames: atlas.frames,
+      textureUuid: atlas.textureUuid || null,
+      textureUuidDecoded: decoded || null,
+      matchHow,
     });
   }
 

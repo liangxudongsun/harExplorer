@@ -4,6 +4,7 @@
  */
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, basename, extname } from 'path';
+import { decompressCocosUuid } from './cocos-uuid.mjs';
 
 const PARTICLE_PLIST_KEYS = [
   'emissionRate',
@@ -228,10 +229,32 @@ function extractParticleFromImport(json, url) {
 }
 
 function uuidFromUrl(url) {
-  const m = String(url).match(
+  const s = String(url);
+  const dashed = s.match(
     /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
   );
-  return m ? m[1].toLowerCase() : null;
+  if (dashed) return dashed[1].toLowerCase();
+  const hex32 = s.match(/\/([0-9a-f]{32})(?:\.[a-z0-9]+)?(?:\?|$)/i);
+  if (hex32) {
+    const h = hex32[1].toLowerCase();
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  const compressed = s.match(
+    /\/([A-Za-z0-9+/_-]{22,23})(?:\.[a-z0-9]+)?(?:\?|$)/,
+  );
+  if (compressed) {
+    const decoded = decompressCocosUuid(compressed[1]);
+    if (decoded) return decoded.toLowerCase();
+  }
+  return null;
+}
+
+function isNativeAssetUrl(url) {
+  return (
+    /\/native\//.test(url) ||
+    /\/raw-assets\//.test(url) ||
+    /\/res\/raw-assets\//.test(url)
+  );
 }
 
 function basenameFromUrl(url) {
@@ -269,7 +292,7 @@ export function writeParticlePacks(outDir, tabId, entries) {
     const uuid = uuidFromUrl(url);
     const mime = e.response?.content?.mimeType || '';
 
-    if (uuid && /\/native\//.test(url)) {
+    if (uuid && isNativeAssetUrl(url)) {
       byUuidNative.set(uuid, { url, buf, mime });
     }
 

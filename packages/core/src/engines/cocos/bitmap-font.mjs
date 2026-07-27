@@ -3,6 +3,10 @@
  * import JSONs, plus conversion to the standard BMFont .fnt text format.
  */
 
+import { decodeCocosUuid } from './cocos-uuid.mjs';
+
+export { decodeCocosUuid };
+
 function bodyText(entry) {
   const c = entry.response?.content;
   if (!c?.text) return null;
@@ -170,25 +174,6 @@ export function extractBitmapFonts(entries) {
     }
   }
   return fonts;
-}
-
-/** Cocos compressed UUID (22 chars) → standard hyphenated form. */
-export function decodeCocosUuid(base64) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  const tbl = new Array(128);
-  for (let i = 0; i < 64; i++) tbl[chars.charCodeAt(i)] = i;
-  const str = String(base64).replace(/-/g, '').split('@')[0];
-  if (str.length !== 22) return str;
-  const hex = [str[0], str[1]];
-  for (let i = 2, j = 2; i < 22; i += 2) {
-    const l = tbl[str.charCodeAt(i)];
-    const r = tbl[str.charCodeAt(i + 1)];
-    hex[j++] = (l >> 2).toString(16);
-    hex[j++] = (((l & 3) << 2) | (r >> 4)).toString(16);
-    hex[j++] = (r & 0xf).toString(16);
-  }
-  const h = hex.join('');
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
 /** When an import JSON is dedicated to one font, its lone @6c48a ref is the atlas. */
