@@ -3,11 +3,14 @@
  * Server for the HAR texture viewer.
  *
  * Static file serving + a POST /upload endpoint that accepts a raw .har body,
- * auto-detects the engine (cocos / pragmatic / slotmill), builds a tab into the
- * served directory, appends it to catalog.json, and returns the tab JSON so the
- * page can add it live.
+ * auto-detects the engine (cocos / pragmatic / slotmill / gameart), builds a tab
+ * into the served directory, appends it to catalog.json, and returns the tab JSON
+ * so the page can add it live.
  *
- * Usage: node serve-texture-viewer.mjs [--dir path] [--port 8765]
+ * Usage:
+ *   node packages/web/server.mjs [--dir path] [--port 8765] [--host 0.0.0.0]
+ *   --host 127.0.0.1  仅本机
+ *   --host 0.0.0.0    局域网可访问（默认）
  */
 import { createServer } from 'http';
 import {
@@ -19,14 +22,37 @@ import {
 } from 'fs';
 import { join, extname, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { buildSlotmillTab, buildPragmaticTab, buildCocosTab, detectEngine, hydrateTabFromSignedUrls } from '../core/src/index.mjs';
+import { networkInterfaces } from 'os';
+import {
+  buildSlotmillTab,
+  buildPragmaticTab,
+  buildCocosTab,
+  buildGameartTab,
+  detectEngine,
+  hydrateTabFromSignedUrls,
+} from '../core/src/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const dirIdx = args.indexOf('--dir');
 const portIdx = args.indexOf('--port');
+const hostIdx = args.indexOf('--host');
 const ROOT = dirIdx >= 0 ? args[dirIdx + 1] : join(process.cwd(), 'dist', 'texture-viewer');
 const PORT = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : 8765;
+const HOST = hostIdx >= 0 ? args[hostIdx + 1] : '0.0.0.0';
+
+function lanIPv4List() {
+  const out = [];
+  const ifaces = networkInterfaces();
+  for (const list of Object.values(ifaces)) {
+    for (const info of list || []) {
+      if (info.family !== 'IPv4' && info.family !== 4) continue;
+      if (info.internal) continue;
+      out.push(info.address);
+    }
+  }
+  return out;
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -55,6 +81,7 @@ const BUILDERS = {
   cocos: buildCocosTab,
   pragmatic: buildPragmaticTab,
   slotmill: buildSlotmillTab,
+  gameart: buildGameartTab,
 };
 
 function safeId(name) {
@@ -129,23 +156,33 @@ async function handleUpload(req, res) {
       type: detection.engine,
       har: harPath,
     };
-    const tab = build(harPath, ROOT, src);
+    // Slotmill builder is async (may fetch missing .avif bodies)
+    const built = build(harPath, ROOT, src);
+    const tab = typeof built?.then === 'function' ? await built : built;
     tab.engineDetection = detection;
 
-    // 签名 URL 未过期时，把仍为 remote 的贴图拉进本地 cdn-cache
+    // PG / 签名 CDN：禁止外链补拉（CORS / sign 策略）；只信 HAR 正文 + 本地 cdn-cache
     if (detection.engine === 'cocos' && typeof hydrateTabFromSignedUrls === 'function') {
-      try {
-        const hyd = await hydrateTabFromSignedUrls(tab, ROOT, id, {
-          concurrency: 8,
-          timeoutMs: 15000,
-        });
-        if (hyd.fetched || hyd.failed) {
-          console.log(
-            `CDN hydrate: fetched=${hyd.fetched} failed=${hyd.failed} pending=${hyd.pending}`
-          );
+      const remotes = (tab.textures || []).filter((t) => t.srcType === 'remote');
+      const signedHeavy = remotes.filter((t) => /[?&]sign=/i.test(t.url || t.src || '')).length;
+      if (signedHeavy > 0 && signedHeavy >= remotes.length * 0.5) {
+        console.log(
+          `CDN hydrate skipped: ${signedHeavy}/${remotes.length} remotes are signed (HAR-only policy)`
+        );
+      } else if (remotes.length) {
+        try {
+          const hyd = await hydrateTabFromSignedUrls(tab, ROOT, id, {
+            concurrency: 8,
+            timeoutMs: 15000,
+          });
+          if (hyd.fetched || hyd.failed) {
+            console.log(
+              `CDN hydrate: fetched=${hyd.fetched} failed=${hyd.failed} pending=${hyd.pending}`
+            );
+          }
+        } catch (e) {
+          console.warn('CDN hydrate skipped:', e?.message ?? e);
         }
-      } catch (e) {
-        console.warn('CDN hydrate skipped:', e?.message ?? e);
       }
     }
 
@@ -159,7 +196,10 @@ async function handleUpload(req, res) {
       `Upload: ${rawName} → ${detection.engine}` +
         (detection.cocosMajor != null ? `/${detection.cocosMajor}.x` : '') +
         ` (tab ${id}, ${tab.meta?.total ?? 0} textures, ` +
-        `embedded=${tab.meta?.embedded ?? 0})`
+        `embedded=${tab.meta?.embedded ?? 0}, ` +
+        `spine=${tab.animationManifest?.length ?? 0}, ` +
+        `audio=${tab.audioManifest?.length ?? 0}, ` +
+        `fonts=${tab.fontManifest?.length ?? 0})`
     );
   } catch (err) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -182,20 +222,15 @@ function resolveFile(urlPath) {
   if (rel === 'particle-player' || rel === 'particle-player/') {
     rel = 'particle-player/index.html';
   }
+
+  // Prefer viewer app assets (html / vendor / players) from package source.
+  // Allow any file under VIEWER_DIR so new players (spine4, …) don't need an
+  // allowlist bump + server restart to be reachable.
   const appFile = join(VIEWER_DIR, rel);
-  const isAppAsset =
-    rel === 'spine37-player.html' ||
-    rel === 'spine-bake.js' ||
-    rel.startsWith('vendor/') ||
-    rel.startsWith('particle-player/');
-  if (
-    isAppAsset &&
-    appFile.startsWith(VIEWER_DIR) &&
-    existsSync(appFile) &&
-    !statSync(appFile).isDirectory()
-  ) {
+  if (appFile.startsWith(VIEWER_DIR) && existsSync(appFile) && !statSync(appFile).isDirectory()) {
     return appFile;
   }
+
   const dataFile = join(ROOT, rel);
   if (dataFile.startsWith(ROOT) && existsSync(dataFile) && !statSync(dataFile).isDirectory()) {
     return dataFile;
@@ -223,8 +258,17 @@ const server = createServer((req, res) => {
   serveStatic(req, res);
 });
 
-server.listen(PORT, () => {
-  console.log(`Texture viewer: http://127.0.0.1:${PORT}/`);
+server.listen(PORT, HOST, () => {
+  console.log(`Texture viewer listening on ${HOST}:${PORT}`);
+  console.log(`  本机:    http://127.0.0.1:${PORT}/`);
+  for (const ip of lanIPv4List()) {
+    console.log(`  局域网:  http://${ip}:${PORT}/`);
+  }
+  if (HOST === '127.0.0.1' || HOST === 'localhost') {
+    console.log('（当前仅本机；局域网请用 --host 0.0.0.0）');
+  } else {
+    console.log('若同事打不开：检查 Windows 防火墙是否放行入站 TCP ' + PORT);
+  }
   console.log(`Serving: ${ROOT}`);
   console.log('Upload a HAR: POST /upload (raw body, header x-file-name)');
 });

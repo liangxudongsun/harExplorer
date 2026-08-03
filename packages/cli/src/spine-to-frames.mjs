@@ -6,7 +6,7 @@
  * images — exactly what the viewer/CLI export produces
  * (e.g. dist/texture-viewer/animations/<tab>/<id>/ or spine-export bare dirs).
  *
- * The skeleton's Spine version picks the runtime (3.7 or 3.8), frames are
+ * The skeleton's Spine version picks the runtime (3.7 / 3.8 / 4.1), frames are
  * rendered deterministically off-screen (Playwright + SwiftShader WebGL) and
  * written as <out>/<animation>/frame_0000.png ... plus a meta.json.
  *
@@ -68,29 +68,42 @@ const atlasText = readFileSync(join(packDir, atlasFile), 'utf8')
   .replace(/size:\s*(\d+)\s*,\s*(\d+)\n+\n+(format:)/gi, 'size: $1,$2\n$3');
 
 const version = String(skeletonJson.skeleton?.spine ?? '3.8');
-const is37 = version.startsWith('3.7');
-const runtimeFile = is37 ? 'spine-webgl-3.7.js' : 'spine-player-3.8.js';
+const is37 = /^3\.[5-7]\b/.test(version);
+const is4 = /^4\./.test(version);
+const runtimeFile = is37
+  ? 'spine-webgl-3.7.js'
+  : is4
+    ? 'spine-player-4.1.min.js'
+    : 'spine-player-3.8.js';
 
 // Page images referenced by the atlas → data URIs.
 const pageImages = {};
 for (const line of atlasText.split('\n')) {
   const name = line.trim();
-  if (!/\.(png|jpg|jpeg|webp)$/i.test(name)) continue;
+  if (!/\.(png|jpg|jpeg|webp|avif)$/i.test(name)) continue;
   const p = join(packDir, name);
   if (!existsSync(p)) {
     console.warn(`  ! atlas page missing on disk: ${name} (transparent placeholder)`);
     continue;
   }
   const ext = name.split('.').pop().toLowerCase();
-  const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+  const mime =
+    ext === 'jpg' || ext === 'jpeg'
+      ? 'image/jpeg'
+      : ext === 'webp'
+        ? 'image/webp'
+        : ext === 'avif'
+          ? 'image/avif'
+          : 'image/png';
   pageImages[name] = `data:${mime};base64,${readFileSync(p).toString('base64')}`;
 }
 
 const OUT = resolve(opt('out', join(packDir, 'frames')));
 mkdirSync(OUT, { recursive: true });
 
+const runtimeLabel = is37 ? '3.7' : is4 ? '4.1' : '3.8';
 console.log(`Pack: ${packDir}`);
-console.log(`Spine ${version} → runtime ${is37 ? '3.7' : '3.8'} · fps ${FPS} · scale ${SCALE} · pipeline ${PIPELINE}${MAX_SIZE != null ? ` · maxSize ${MAX_SIZE}` : ''}`);
+console.log(`Spine ${version} → runtime ${runtimeLabel} · fps ${FPS} · scale ${SCALE} · pipeline ${PIPELINE}${MAX_SIZE != null ? ` · maxSize ${MAX_SIZE}` : ''}`);
 
 const browser = await chromium.launch({
   headless: true,

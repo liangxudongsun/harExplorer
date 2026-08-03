@@ -4,7 +4,75 @@
  */
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, basename, extname } from 'path';
+import { deflateSync } from 'zlib';
 import { decompressCocosUuid } from './cocos-uuid.mjs';
+
+const TEXTURE_MIME_RE = /^image\//;
+
+/**
+ * Soft white circle PNG for plists whose spriteFrameUuid was never fetched in HAR
+ * (common on PG Soft / signed CDN captures). Particle colors still come from plist.
+ */
+function buildSoftParticlePng(size = 64) {
+  const w = size;
+  const h = size;
+  const raw = Buffer.alloc(w * h * 4 + h);
+  const cx = (w - 1) / 2;
+  const cy = (h - 1) / 2;
+  const rMax = Math.min(cx, cy);
+  for (let y = 0; y < h; y++) {
+    const row = y * (w * 4 + 1);
+    raw[row] = 0; // filter: none
+    for (let x = 0; x < w; x++) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const d = Math.sqrt(dx * dx + dy * dy) / rMax;
+      const a = d >= 1 ? 0 : Math.round((1 - d) * (1 - d) * 255);
+      const i = row + 1 + x * 4;
+      raw[i] = 255;
+      raw[i + 1] = 255;
+      raw[i + 2] = 255;
+      raw[i + 3] = a;
+    }
+  }
+  const compressed = deflateSync(raw);
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // RGBA
+  const crcTable = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  const crc32 = (buf) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) {
+      c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const typeBuf = Buffer.from(type);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
+    return Buffer.concat([len, typeBuf, data, crcBuf]);
+  };
+  return Buffer.concat([
+    signature,
+    chunk('IHDR', ihdr),
+    chunk('IDAT', compressed),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
 
 const PARTICLE_PLIST_KEYS = [
   'emissionRate',
@@ -95,6 +163,16 @@ function parsePlistParams(xml) {
     blendFuncDestination: params.blendFuncDestination,
     rotationIsDir: params.rotationIsDir,
   };
+  // Cocos plist 常省略 emissionRate，运行时按 totalParticles/life 推导；
+  // custom 预览若不补上会一直是 0 → Instance count 0。
+  if (
+    (normalized.emissionRate == null || !(normalized.emissionRate > 0)) &&
+    typeof normalized.totalParticles === 'number' &&
+    typeof normalized.life === 'number' &&
+    normalized.life > 0
+  ) {
+    normalized.emissionRate = normalized.totalParticles / normalized.life;
+  }
   return { raw: params, normalized };
 }
 
@@ -292,8 +370,17 @@ export function writeParticlePacks(outDir, tabId, entries) {
     const uuid = uuidFromUrl(url);
     const mime = e.response?.content?.mimeType || '';
 
-    if (uuid && isNativeAssetUrl(url)) {
-      byUuidNative.set(uuid, { url, buf, mime });
+    // Index any image response by UUID-in-URL (native / raw-assets / hashed CDN).
+    if (
+      uuid &&
+      (isNativeAssetUrl(url) ||
+        TEXTURE_MIME_RE.test(mime) ||
+        /\.(png|jpe?g|webp|gif|bmp)(\?|$)/i.test(url))
+    ) {
+      const prev = byUuidNative.get(uuid);
+      if (!prev || buf.length >= (prev.buf?.length ?? 0)) {
+        byUuidNative.set(uuid, { url, buf, mime });
+      }
     }
 
     if (/\/config\.json(\?|$)/.test(url)) {
@@ -347,20 +434,27 @@ export function writeParticlePacks(outDir, tabId, entries) {
   }
 
   const ensureTexture = (sfUuid, dir) => {
-    if (!sfUuid) return null;
-    const base = String(sfUuid).split('@')[0].toLowerCase();
-    const hit = byUuidNative.get(base);
-    if (!hit) return null;
-    let ext = '.png';
-    try {
-      ext = extname(new URL(hit.url).pathname) || '.png';
-    } catch {
-      /* keep .png */
+    const base = sfUuid
+      ? String(sfUuid).split('@')[0].toLowerCase()
+      : null;
+    const hit = base ? byUuidNative.get(base) : null;
+    if (hit) {
+      let ext = '.png';
+      try {
+        ext = extname(new URL(hit.url).pathname) || '.png';
+      } catch {
+        /* keep .png */
+      }
+      const fileName = `texture${ext}`;
+      const file = join(dir, fileName);
+      if (!existsSync(file)) writeFileSync(file, hit.buf);
+      return { fileName, fallback: false };
     }
-    const fileName = `texture${ext}`;
+    // HAR 未抓到 spriteFrame 贴图时仍可预览（用颜色通道画粒子）
+    const fileName = 'texture.png';
     const file = join(dir, fileName);
-    if (!existsSync(file)) writeFileSync(file, hit.buf);
-    return fileName;
+    if (!existsSync(file)) writeFileSync(file, buildSoftParticlePng(64));
+    return { fileName, fallback: true };
   };
 
   const manifest = [];
@@ -379,7 +473,7 @@ export function writeParticlePacks(outDir, tabId, entries) {
     const dir = join(root, id);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${id}.plist`), p.buf);
-    const textureFile = ensureTexture(p.params.spriteFrameUuid, dir);
+    const tex = ensureTexture(p.params.spriteFrameUuid, dir);
     const relBase = `particles/${tabId}/${id}`;
     const item = {
       id,
@@ -389,9 +483,11 @@ export function writeParticlePacks(outDir, tabId, entries) {
       uuid: p.uuid,
       url: p.url,
       plistUrl: `${relBase}/${id}.plist`,
-      textureUrl: textureFile ? `${relBase}/${textureFile}` : null,
+      textureUrl: tex ? `${relBase}/${tex.fileName}` : null,
+      textureFallback: tex?.fallback === true,
       params: p.params,
       paramSource: 'plist',
+      note: tex?.fallback ? 'HAR 无粒子贴图 UUID，已用占位圆点' : undefined,
     };
     writeFileSync(join(dir, 'meta.json'), JSON.stringify(item, null, 2));
     manifest.push(item);
@@ -440,7 +536,7 @@ export function writeParticlePacks(outDir, tabId, entries) {
       plistUrl = `particles/${tabId}/${id}/${id}.plist`;
     }
 
-    const textureFile = ensureTexture(
+    const tex = ensureTexture(
       sfRef || matchedPlist?.params?.spriteFrameUuid,
       dir,
     );
@@ -453,13 +549,16 @@ export function writeParticlePacks(outDir, tabId, entries) {
       url: pref.url,
       prefabUrl: `${relBase}/${id}.prefab.json`,
       plistUrl,
-      textureUrl: textureFile ? `${relBase}/${textureFile}` : null,
+      textureUrl: tex ? `${relBase}/${tex.fileName}` : null,
+      textureFallback: tex?.fallback === true,
       params: pref.params,
       paramSource: 'prefab',
       note:
         pref.params?.custom === true
           ? 'custom=true：以 prefab 参数为准'
-          : undefined,
+          : tex?.fallback
+            ? 'HAR 无粒子贴图，已用占位圆点'
+            : undefined,
     };
     writeFileSync(join(dir, 'meta.json'), JSON.stringify(item, null, 2));
     // Only list if we can at least apply params or have a texture/plist

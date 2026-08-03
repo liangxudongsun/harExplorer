@@ -3,6 +3,7 @@ export { detectEngine } from './detect-engine.mjs';
 export { buildCocosTab } from './engines/cocos/build-tab.mjs';
 export { buildPragmaticTab } from './engines/pragmatic/build-tab.mjs';
 export { buildSlotmillTab } from './engines/slotmill/build-tab.mjs';
+export { buildGameartTab } from './engines/gameart/build-tab.mjs';
 
 export { detectCocosMajor } from './engines/cocos/detect-cocos-major.mjs';
 export {
@@ -20,6 +21,7 @@ export {
   detectFramesFromRgba,
   detectAtlasFramesFromImage,
   shouldDetectStaticAtlas,
+  isAutoMatchHow,
 } from './engines/cocos/detect-atlas-from-image.mjs';
 
 export { scanCocosHar, tagCocosTextures } from './engines/cocos/parse-import.mjs';

@@ -16,5 +16,29 @@
     "label": "塞特2",
     "type": "cocos",
     "har": "samples/play.godeebxp.com.har"
+  },
+  {
+    "id": "eternal-dusk",
+    "label": "Eternal Dusk",
+    "type": "slotmill",
+    "har": "samples/eternal-dusk.slotmill.com.har"
+  },
+  {
+    "id": "eajzzxhro-hd",
+    "label": "eajzzxhro HD",
+    "type": "cocos",
+    "har": "samples/m.eajzzxhro.com_hd.har"
+  },
+  {
+    "id": "eajzzxhro",
+    "label": "eajzzxhro",
+    "type": "cocos",
+    "har": "samples/m.eajzzxhro.com.har"
+  },
+  {
+    "id": "lunar-rabbit",
+    "label": "Lunar Rabbit",
+    "type": "gameart",
+    "har": "samples/hgdemo.gameart.io.har"
   }
 ]

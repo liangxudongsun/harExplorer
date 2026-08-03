@@ -146,22 +146,37 @@ export function buildPragmaticTab(harPath, outDir, src) {
     const mime = entry.response?.content?.mimeType ?? '';
     if (!/^image\//.test(mime) && !/\.(png|jpg|jpeg|webp|avif)(\?|$)/i.test(url)) continue;
     const size = getBodySize(entry);
-    const key = url;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    let srcPath = url;
-    let srcType = 'remote';
+    let pathKey = url;
+    try {
+      const u = new URL(url);
+      pathKey = `${u.hostname}${u.pathname}`;
+    } catch { /* keep url */ }
     const content = entry.response?.content ?? {};
-    if (content.text && content.encoding === 'base64' && mime.startsWith('image/')) {
+    const canEmbed = !!(content.text && content.encoding === 'base64' && mime.startsWith('image/'));
+
+    if (seen.has(pathKey)) {
+      // 同路径优先升级为 embedded
+      if (!canEmbed) continue;
+      const prev = textures.find((t) => t._key === pathKey);
+      if (prev?.srcType === 'embedded') continue;
+    } else {
+      seen.add(pathKey);
+    }
+
+    let srcPath = '';
+    let srcType = 'missing';
+    if (canEmbed) {
       const ext = extFromPathname(url) || '.bin';
       const outFile = safeFileName(basename(new URL(url).pathname), id, ext);
       writeFileSync(join(assetsDir, outFile), Buffer.from(content.text, 'base64'));
       srcPath = `embedded/${src.id}/${outFile}`;
       srcType = 'embedded';
+    } else if (!/[?&]sign=/i.test(url)) {
+      srcPath = url;
+      srcType = 'remote';
     }
 
-    textures.push({
+    const row = {
       id: id++,
       url,
       path: new URL(url).pathname,
@@ -175,7 +190,11 @@ export function buildPragmaticTab(harPath, outDir, src) {
       src: srcPath,
       srcType,
       source: 'direct',
-    });
+      _key: pathKey,
+    };
+    const existIdx = textures.findIndex((t) => t._key === pathKey);
+    if (existIdx >= 0) textures[existIdx] = { ...row, id: textures[existIdx].id };
+    else textures.push(row);
   }
 
   for (const entry of entries) {
@@ -236,6 +255,7 @@ export function buildPragmaticTab(harPath, outDir, src) {
   }
 
   textures.sort((a, b) => b.size - a.size);
+  for (const t of textures) delete t._key;
   const channel =
     textures.some((t) => t.channel === 'mobile') && !textures.some((t) => t.channel === 'desktop')
       ? 'mobile'
@@ -253,6 +273,7 @@ export function buildPragmaticTab(harPath, outDir, src) {
       total: textures.length,
       embedded: textures.filter((t) => t.srcType === 'embedded').length,
       remote: textures.filter((t) => t.srcType === 'remote').length,
+      missing: textures.filter((t) => t.srcType === 'missing').length,
       directImages: textures.filter((t) => t.source === 'direct').length,
       fromJson: textures.filter((t) => t.source !== 'direct').length,
       channel,

@@ -1,9 +1,9 @@
 {
   "name": "har-explore",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "type": "module",
-  "description": "HAR game asset extractor — CLI + web viewer for Cocos 2.x/3.x / Pragmatic / Slotmill",
+  "description": "HAR game asset extractor — CLI + web viewer for Cocos 2.x/3.x / Pragmatic / Slotmill / GameArt",
   "workspaces": [
     "packages/*"
   ],

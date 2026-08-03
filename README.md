@@ -1,6 +1,6 @@
 # har-explore
 
-从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体、粒子、音频）。支持 **Cocos Creator 2.x / 3.x**、**Pragmatic Play**、**Slotmill** 的自动识别。
+从 HAR 文件提取、预览游戏资源（纹理、Spine、位图字体、粒子、音频）。支持 **Cocos Creator 2.x / 3.x**、**Pragmatic Play**、**Slotmill**、**GameArt** 的自动识别。
 
 技术说明（可分享）：[docs/资源提取与预览技术.md](docs/资源提取与预览技术.md)
 
@@ -33,9 +33,11 @@ npm run build:catalog:enrich
 # 或对已有 catalog 单独 enrich
 npm run enrich:atlas-frames
 
-# 4. 启动 Web（支持拖拽上传新 HAR）
+# 4. 启动 Web（支持拖拽上传新 HAR；默认监听 0.0.0.0，局域网可访问）
 npm run serve
-# → http://127.0.0.1:8765/
+# → 本机 http://127.0.0.1:8765/
+# → 局域网 http://<你的IP>:8765/  （启动日志会打印）
+# 仅本机：npm run serve -- --host 127.0.0.1
 ```
 
 ## CLI

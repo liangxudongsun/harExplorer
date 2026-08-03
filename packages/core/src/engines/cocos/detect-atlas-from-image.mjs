@@ -1,8 +1,9 @@
 /**
- * Detect packed atlas frames from image alpha when Cocos SpriteFrame metadata is missing.
+ * Detect packed atlas frames when Cocos SpriteFrame metadata is missing.
  *
- * Strategy: high-alpha seeds (avoids soft-glow bridges) → connected components →
- * expand each bbox to include nearby low-alpha fringe.
+ * Strategies:
+ * 1) alpha-cc — high-alpha seeds → connected components (transparent sheets)
+ * 2) luma-cc  — bright-vs-near-black seeds (opaque packs on black / dark plate)
  */
 
 import fs from "node:fs";
@@ -13,6 +14,7 @@ import path from "node:path";
  * @param {number} width
  * @param {number} height
  * @param {{
+ *   maskMode?: "alpha" | "luma",
  *   seedThreshold?: number,
  *   fringeThreshold?: number,
  *   expand?: number,
@@ -23,20 +25,25 @@ import path from "node:path";
  * }} [opts]
  */
 export function detectFramesFromRgba(rgba, width, height, opts = {}) {
-  const seedThreshold = opts.seedThreshold ?? 96;
-  const fringeThreshold = opts.fringeThreshold ?? 16;
+  const maskMode = opts.maskMode === "luma" ? "luma" : "alpha";
+  const seedThreshold = opts.seedThreshold ?? (maskMode === "luma" ? 32 : 96);
+  const fringeThreshold = opts.fringeThreshold ?? (maskMode === "luma" ? 10 : 16);
   const expand = opts.expand ?? 2;
   const minSize = opts.minSize ?? 8;
   const minArea = opts.minArea ?? 128;
-  const maxFrameAreaRatio = opts.maxFrameAreaRatio ?? 0.55;
+  const maxFrameAreaRatio = opts.maxFrameAreaRatio ?? (maskMode === "luma" ? 0.75 : 0.55);
   const maxFrames = opts.maxFrames ?? 400;
   const n = width * height;
   const seed = new Uint8Array(n);
   const fringe = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
-    const a = rgba[i * 4 + 3];
-    if (a > seedThreshold) seed[i] = 1;
-    if (a > fringeThreshold) fringe[i] = 1;
+    const o = i * 4;
+    const v =
+      maskMode === "luma"
+        ? (rgba[o] + rgba[o + 1] + rgba[o + 2]) / 3
+        : rgba[o + 3];
+    if (v > seedThreshold) seed[i] = 1;
+    if (v > fringeThreshold) fringe[i] = 1;
   }
 
   const seen = new Uint8Array(n);
@@ -124,32 +131,19 @@ export function detectFramesFromRgba(rgba, width, height, opts = {}) {
   return kept;
 }
 
-/**
- * @param {string} imageAbs
- * @param {{ sharp?: any, maxDetectEdge?: number } & Parameters<typeof detectFramesFromRgba>[3]} [opts]
- */
-export async function detectAtlasFramesFromImage(imageAbs, opts = {}) {
-  if (!fs.existsSync(imageAbs)) return [];
-  const sharpMod = opts.sharp || (await import("sharp")).default;
-  const meta = await sharpMod(imageAbs).metadata();
-  const width = meta.width || 0;
-  const height = meta.height || 0;
-  if (width < 64 || height < 64) return [];
+function alphaUseful(rgba, width, height, fringeThreshold = 16) {
+  const n = width * height;
+  const sampleStep = Math.max(1, Math.floor(n / 20000));
+  let transparentish = 0;
+  let samples = 0;
+  for (let i = 0; i < n; i += sampleStep) {
+    samples++;
+    if (rgba[i * 4 + 3] <= fringeThreshold) transparentish++;
+  }
+  return samples > 0 && transparentish / samples >= 0.02;
+}
 
-  const maxEdge = opts.maxDetectEdge ?? 1536;
-  const scale = Math.min(1, maxEdge / Math.max(width, height));
-  const dw = Math.max(1, Math.round(width * scale));
-  const dh = Math.max(1, Math.round(height * scale));
-
-  const { data, info } = await sharpMod(imageAbs)
-    .ensureAlpha()
-    .resize(dw, dh, { fit: "fill", kernel: "nearest" })
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const frames = detectFramesFromRgba(data, info.width, info.height, opts);
-  if (frames.length < 3) return [];
-
+function scaleFrames(frames, scale, width, height) {
   const inv = scale > 0 ? 1 / scale : 1;
   return frames.map((f, i) => {
     const x = Math.max(0, Math.floor(f.x * inv));
@@ -174,6 +168,66 @@ export async function detectAtlasFramesFromImage(imageAbs, opts = {}) {
 }
 
 /**
+ * @param {string} imageAbs
+ * @param {{
+ *   sharp?: any,
+ *   maxDetectEdge?: number,
+ *   minFrames?: number,
+ *   forceMaskMode?: "alpha" | "luma",
+ * } & Parameters<typeof detectFramesFromRgba>[3]} [opts]
+ * @returns {Promise<{frames: ReturnType<typeof detectFramesFromRgba>, matchHow: string|null}>}
+ */
+export async function detectAtlasFramesFromImage(imageAbs, opts = {}) {
+  if (!fs.existsSync(imageAbs)) return { frames: [], matchHow: null };
+  const sharpMod = opts.sharp || (await import("sharp")).default;
+  const meta = await sharpMod(imageAbs).metadata();
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+  if (width < 64 || height < 64) return { frames: [], matchHow: null };
+
+  const maxEdge = opts.maxDetectEdge ?? 1536;
+  const minFrames = opts.minFrames ?? 2;
+  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  const dw = Math.max(1, Math.round(width * scale));
+  const dh = Math.max(1, Math.round(height * scale));
+
+  const { data, info } = await sharpMod(imageAbs)
+    .ensureAlpha()
+    .resize(dw, dh, { fit: "fill", kernel: "nearest" })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const force = opts.forceMaskMode;
+  const tryAlpha = force !== "luma";
+  const tryLuma = force === "luma" || force === undefined;
+
+  if (tryAlpha && (force === "alpha" || alphaUseful(data, info.width, info.height, opts.fringeThreshold ?? 16))) {
+    const frames = detectFramesFromRgba(data, info.width, info.height, {
+      ...opts,
+      maskMode: "alpha",
+    });
+    if (frames.length >= minFrames) {
+      return { frames: scaleFrames(frames, scale, width, height), matchHow: "alpha-cc" };
+    }
+  }
+
+  if (tryLuma) {
+    const frames = detectFramesFromRgba(data, info.width, info.height, {
+      ...opts,
+      maskMode: "luma",
+      seedThreshold: opts.seedThreshold ?? 32,
+      fringeThreshold: opts.fringeThreshold ?? 10,
+      maxFrameAreaRatio: opts.maxFrameAreaRatio ?? 0.75,
+    });
+    if (frames.length >= minFrames) {
+      return { frames: scaleFrames(frames, scale, width, height), matchHow: "luma-cc" };
+    }
+  }
+
+  return { frames: [], matchHow: null };
+}
+
+/**
  * @param {{ width?: number, height?: number, frames?: any[], resourceType?: string }} tex
  */
 export function shouldDetectStaticAtlas(tex) {
@@ -189,4 +243,10 @@ export function shouldDetectStaticAtlas(tex) {
 
 export function atlasCachePath(dataRoot, tabId, texId) {
   return path.join(dataRoot, "atlases", String(tabId), `${texId}.auto.json`);
+}
+
+/** Guessed frame rects (alpha or luma connected components). */
+export function isAutoMatchHow(matchHow) {
+  const m = String(matchHow || "");
+  return m === "alpha-cc" || m === "luma-cc";
 }

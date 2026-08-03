@@ -1,6 +1,6 @@
 /**
  * Content-based game-engine detection for a HAR's entries.
- * Returns one of: 'cocos' | 'pragmatic' | 'slotmill'.
+ * Returns one of: 'cocos' | 'pragmatic' | 'slotmill' | 'gameart'.
  *
  * Detection is heuristic and scored: every entry contributes hits to the
  * engines it matches (by URL, then by a light body sniff for a few scripts).
@@ -29,12 +29,13 @@ function mimeOf(entry) {
 }
 
 export function detectEngine(entries, pageTitle = '') {
-  const score = { cocos: 0, pragmatic: 0, slotmill: 0 };
+  const score = { cocos: 0, pragmatic: 0, slotmill: 0, gameart: 0 };
   const title = String(pageTitle ?? '').toLowerCase();
 
   if (/pragmatic/.test(title)) score.pragmatic += 5;
   if (/slotmill/.test(title)) score.slotmill += 5;
   if (/cocos|creator/.test(title)) score.cocos += 5;
+  if (/gameart|hypergaming|gahypergaming/.test(title)) score.gameart += 8;
 
   let bodySniffs = 0;
   for (const entry of entries) {
@@ -44,6 +45,15 @@ export function detectEngine(entries, pageTitle = '') {
     // --- host / URL signals (cheap) ---
     if (/pragmaticplay|\.pragmatic/.test(url)) score.pragmatic += 5;
     if (/slotmill/.test(url)) score.slotmill += 5;
+    if (/\/assets\/spine\/avif\//.test(url)) score.slotmill += 3;
+    if (/\/assets\/sounds\/ogg\//.test(url)) score.slotmill += 2;
+
+    // GameArt / HyperGaming（PIXI + Spine；勿与 PP 的 PIXI 信号混淆）
+    if (/gameart\.io|gahypergaming\.com/.test(url)) score.gameart += 5;
+    if (/\/gameart\/games\//.test(url)) score.gameart += 4;
+    if (/assetslist\.json/.test(url)) score.gameart += 8;
+    if (/\/graphics\/mobile\/spines\//.test(url)) score.gameart += 3;
+    if (/\/spines\/oneatlas\//.test(url)) score.gameart += 4;
 
     if (/\/import\/[0-9a-f]{2}\//.test(url)) score.cocos += 3;
     if (/\/assets\/[^/]+\/native\//.test(url)) score.cocos += 3;
@@ -73,10 +83,17 @@ export function detectEngine(entries, pageTitle = '') {
         ) {
           score.cocos += 3;
         }
-        if (/UHTEventBroker|PIXI\.|pragmatic|gameService/.test(head)) {
+        // PIXI 为多家共用：单独只给弱分；PP 专有符号仍强分
+        if (/UHTEventBroker|pragmaticplay|gameService/.test(head)) {
           score.pragmatic += 3;
         }
+        if (/\bPIXI\./.test(head)) {
+          score.pragmatic += 1;
+          score.gameart += 1;
+          score.slotmill += 1;
+        }
         if (/slotmill/i.test(head)) score.slotmill += 3;
+        if (/gameart|hypergaming|assetsList/i.test(head)) score.gameart += 3;
       }
     }
   }

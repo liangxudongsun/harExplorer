@@ -13,8 +13,11 @@ import { fileURLToPath } from "node:url";
 import { scanCocosHar, tagCocosTextures } from "../packages/core/src/engines/cocos/parse-import.mjs";
 import {
   detectAtlasFramesFromImage,
+  isAutoMatchHow,
   shouldDetectStaticAtlas,
 } from "../packages/core/src/engines/cocos/detect-atlas-from-image.mjs";
+
+const MIN_AUTO_FRAMES = 2;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -36,7 +39,7 @@ function writeSidecar(tabId, tex) {
   const atlasDir = path.join(outDir, "atlases", tabId);
   fs.mkdirSync(atlasDir, { recursive: true });
   const id = String(tex.id);
-  const file = path.join(atlasDir, tex.matchHow?.startsWith("alpha") ? `${id}.auto.json` : `${id}.json`);
+  const file = path.join(atlasDir, isAutoMatchHow(tex.matchHow) ? `${id}.auto.json` : `${id}.json`);
   fs.writeFileSync(
     file,
     JSON.stringify(
@@ -70,34 +73,36 @@ async function detectStaticAtlases(tab) {
 
     const cachePath = path.join(outDir, "atlases", tab.id, `${tex.id}.auto.json`);
     let found = null;
+    let matchHow = "alpha-cc";
     if (fs.existsSync(cachePath)) {
       try {
         const cached = JSON.parse(fs.readFileSync(cachePath, "utf8"));
         const srcStat = fs.statSync(abs);
         if (
           Array.isArray(cached.frames) &&
-          cached.frames.length >= 3 &&
+          cached.frames.length >= MIN_AUTO_FRAMES &&
           cached.src === srcRel &&
           cached.sourceMtimeMs === srcStat.mtimeMs
         ) {
           found = cached.frames;
+          matchHow = isAutoMatchHow(cached.matchHow) ? cached.matchHow : "alpha-cc";
         }
       } catch {
         /* ignore */
       }
     }
     if (!found) {
-      process.stdout.write(`  alpha-detect ${tab.id}/${tex.id} (${tex.width}x${tex.height})… `);
-      found = await detectAtlasFramesFromImage(abs, {
-        seedThreshold: 96,
-        fringeThreshold: 16,
+      process.stdout.write(`  auto-detect ${tab.id}/${tex.id} (${tex.width}x${tex.height})… `);
+      const detected = await detectAtlasFramesFromImage(abs, {
         expand: 2,
         minSize: 8,
         minArea: 128,
-        maxFrameAreaRatio: 0.55,
+        minFrames: MIN_AUTO_FRAMES,
       });
-      console.log(found.length ? `${found.length} frames` : "none");
-      if (found.length >= 3) {
+      found = detected.frames;
+      matchHow = detected.matchHow || "alpha-cc";
+      console.log(found.length ? `${found.length} frames (${matchHow})` : "none");
+      if (found.length >= MIN_AUTO_FRAMES) {
         fs.mkdirSync(path.dirname(cachePath), { recursive: true });
         fs.writeFileSync(
           cachePath,
@@ -109,7 +114,7 @@ async function detectStaticAtlases(tab) {
               sourceMtimeMs: fs.statSync(abs).mtimeMs,
               width: tex.width,
               height: tex.height,
-              matchHow: "alpha-cc",
+              matchHow,
               frames: found,
             },
             null,
@@ -119,7 +124,7 @@ async function detectStaticAtlases(tab) {
         );
       }
     }
-    if (!found || found.length < 3) continue;
+    if (!found || found.length < MIN_AUTO_FRAMES) continue;
 
     let maxW = 0;
     let maxH = 0;
@@ -134,7 +139,7 @@ async function detectStaticAtlases(tab) {
       atlasFrameCount: found.length,
       atlasBounds: `${maxW}×${maxH}`,
       frames: found,
-      matchHow: "alpha-cc",
+      matchHow,
       sequenceGroups: [],
       sequencePrefix: null,
       sequenceFrameCount: found.length,
@@ -183,7 +188,7 @@ async function main() {
           base.resourceType === "sprite-sequence"
         ) {
           // Keep prior alpha-cc results until alpha pass re-validates
-          if (tex.matchHow === "alpha-cc" && Array.isArray(tex.frames) && tex.frames.length >= 3) {
+          if (isAutoMatchHow(tex.matchHow) && Array.isArray(tex.frames) && tex.frames.length >= MIN_AUTO_FRAMES) {
             return tex;
           }
           base.resourceType = "static";

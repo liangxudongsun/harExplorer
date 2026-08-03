@@ -377,7 +377,8 @@
     #anim-canvas-spine { width: min(720px, 100%); height: 440px; display: block; }
     #anim-player { width: min(760px, 100%); height: 480px; display: none; }
     #anim-player .spine-player { width: 100%; height: 100%; }
-    #anim-player-37 { width: min(760px, 100%); height: 480px; display: none; border: 0; }
+    #anim-player-37,
+    #anim-player-4 { width: min(760px, 100%); height: 480px; display: none; border: 0; }
     .anim-controls {
       display: flex;
       flex-wrap: wrap;
@@ -421,6 +422,62 @@
       background: none;
       border: none;
       padding: 0;
+    }
+    #d-frames { margin-top: 14px; }
+    #d-frames h3 {
+      margin: 0 0 8px;
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+    #d-frames .frame-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    #d-frames .frame-actions button {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    #d-frames .frame-actions button:hover { border-color: var(--accent); color: var(--accent); }
+    #d-frames .frame-actions .hint { font-size: 0.75rem; color: var(--muted); }
+    .frame-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+      gap: 8px;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .frame-cell {
+      background: #12151c;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .frame-cell:hover, .frame-cell.active { border-color: var(--accent); }
+    .frame-cell canvas, .frame-cell img {
+      display: block;
+      width: 100%;
+      height: 56px;
+      object-fit: contain;
+      image-rendering: auto;
+    }
+    .frame-cell .fn {
+      margin-top: 4px;
+      font-size: 0.65rem;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     @media (max-width: 900px) {
       html, body { overflow: auto; height: auto; }
@@ -491,6 +548,7 @@
         <div id="anim-canvas-wrap">
           <div id="anim-player"></div>
           <iframe id="anim-player-37" title="Spine 3.7 Player"></iframe>
+          <iframe id="anim-player-4" title="Spine 4 Player"></iframe>
           <canvas id="anim-canvas-spine" style="display:none"></canvas>
           <canvas id="anim-canvas-2d"></canvas>
         </div>
@@ -505,6 +563,9 @@
               <option value="0.5">0.5×</option>
               <option value="2">2×</option>
             </select>
+          </label>
+          <label title="Cocos 导出的 Spine 贴图通常为预乘透明；关闭时闪光/粒子易出黑块">
+            PMA <input type="checkbox" id="anim-pma" checked />
           </label>
           <label>序列组 <select id="anim-seq"></select></label>
           <label>FPS <input type="range" id="anim-fps" min="4" max="30" value="12" /> <span id="anim-fps-val">12</span></label>
@@ -539,7 +600,10 @@
         <div class="anim-controls">
           <button type="button" id="anim-dl-one" disabled>⬇ 当前Spine资源包</button>
           <button type="button" id="anim-dl-all" disabled>⬇ 全部Spine资源包</button>
-          <span style="font-size:0.78rem;color:var(--muted)">资源包 = skeleton.json + .atlas + 贴图（Spine 原始格式）</span>
+          <button type="button" id="anim-split-atlas" disabled>✂ 拆分图集</button>
+          <span style="font-size:0.78rem;color:var(--muted)">
+            资源包 = skeleton.json + .atlas + 贴图；拆分图集 = 按 region 导出 PNG ZIP
+          </span>
         </div>
         <div id="bake-progress"><div class="bar"><div class="fill" id="bake-fill"></div></div><span class="txt" id="bake-text"></span></div>
         <dl class="kv" id="anim-meta"></dl>
@@ -603,12 +667,38 @@
       <h2 id="d-name"></h2>
       <div class="preview"><img id="d-img" alt="" /></div>
       <dl class="kv" id="d-meta"></dl>
+      <div id="d-frames" style="display:none">
+        <h3 id="d-frames-title">图集子帧</h3>
+        <div class="frame-actions">
+          <button type="button" id="d-frames-export">⬇ 导出全部子帧 ZIP</button>
+          <span class="hint" id="d-frames-hint"></span>
+        </div>
+        <div class="frame-grid" id="d-frames-grid"></div>
+      </div>
     </aside>
   </main>
   <div id="drop-overlay"><div class="box">松开以加载 HAR（自动识别引擎）</div></div>
   <script src="vendor/spine-player-3.8.js"></script>
   <script src="spine-bake.js"></script>
   <script>
+    // Cocos maps Spine "screen" → GL_ONE / GL_ONE_MINUS_SRC_COLOR. Stock Spine 3.8
+    // web used ONE_MINUS_SRC_ALPHA, which turns opaque-black VFX into black boxes
+    // over gold bars / symbols (e.g. s_scatter particles / flares).
+    (function patchSpineScreenBlend() {
+      const conv = window.spine?.webgl?.WebGLBlendModeConverter;
+      if (!conv || !window.spine?.BlendMode) return;
+      const ONE_MINUS_SRC_COLOR = conv.ONE_MINUS_SRC_COLOR ?? 0x0301;
+      conv.getDestGLBlendMode = function (blendMode) {
+        switch (blendMode) {
+          case spine.BlendMode.Normal: return conv.ONE_MINUS_SRC_ALPHA;
+          case spine.BlendMode.Additive: return conv.ONE;
+          case spine.BlendMode.Multiply: return conv.ONE_MINUS_SRC_ALPHA;
+          case spine.BlendMode.Screen: return ONE_MINUS_SRC_COLOR;
+          default: throw new Error('Unknown blend mode: ' + blendMode);
+        }
+      };
+    })();
+
     // Catalog is loaded at runtime from catalog.json (built data directory).
     // The viewer itself carries no HAR data — it starts empty and tabs come
     // from the data dir or live uploads.
@@ -695,7 +785,12 @@
       el.className = 'upload-hint' + (cls ? ` ${cls}` : '');
     }
 
-    const ENGINE_LABELS = { cocos: 'Cocos Creator', pragmatic: 'Pragmatic Play', slotmill: 'Slotmill' };
+    const ENGINE_LABELS = {
+      cocos: 'Cocos Creator',
+      pragmatic: 'Pragmatic Play',
+      slotmill: 'Slotmill',
+      gameart: 'GameArt',
+    };
 
     function cocosEngineLabel(detection, meta) {
       const major = detection?.cocosMajor ?? meta?.cocosMajor;
@@ -812,6 +907,7 @@
         `${meta.total ?? textures.length} 张纹理`,
         meta.embedded != null ? `内嵌 ${meta.embedded}` : null,
         meta.remote != null ? `远程 ${meta.remote}` : null,
+        meta.missing != null && meta.missing > 0 ? `缺正文 ${meta.missing}` : null,
         meta.fromJson != null ? `JSON ${meta.fromJson}` : null,
         meta.channel ? `channel ${meta.channel}` : null,
         meta.spineCount != null ? `Spine ${meta.spineCount}` : null,
@@ -862,8 +958,9 @@
     }
 
     function imgSrc(t) {
-      if (t.srcType === 'embedded') return t.src;
-      return t.src;
+      // PG / 签名 CDN 禁止外链预览：只展示 HAR 抽出的本地文件
+      if (t.srcType === 'embedded' || t.srcType === 'data') return t.src || '';
+      return '';
     }
 
     function renderGrid() {
@@ -885,12 +982,13 @@
             ${rt ? `<span class="badge-type ${typeBadgeClass(t)}">${rt}</span>` : ''}
             <span class="badge">${t.ext.replace('.', '')}</span>
             <img loading="lazy" alt="${t.fileName}" src="${imgSrc(t)}"
-              onerror="this.style.display='none';this.nextElementSibling.style.display='block'" />
-            <div class="placeholder" style="display:none">${t.ext}<br/>加载失败</div>
+              onerror="this.style.display='none';this.nextElementSibling.style.display='block'"
+              ${imgSrc(t) ? '' : 'style="display:none"'} />
+            <div class="placeholder" style="display:${imgSrc(t) ? 'none' : 'block'}">${t.ext}<br/>${t.srcType === 'missing' ? 'HAR无正文' : '加载失败'}</div>
           </div>
           <div class="card-body">
             <div class="name" title="${t.path}">${t.spineName ?? t.fileName}</div>
-            <div class="sub">${t.sizeFmt}${dim ? ' · ' + dim : ''}${t.sequenceFrameCount ? ' · ' + t.sequenceFrameCount + '帧' : ''}</div>
+            <div class="sub">${t.sizeFmt}${dim ? ' · ' + dim : ''}${t.sequenceFrameCount ? ' · ' + t.sequenceFrameCount + '帧' : ''}${Array.isArray(t.frames) && t.frames.length > 1 ? ' · ' + t.frames.length + '子帧' : ''}</div>
           </div>`;
         card.onclick = () => selectTexture(t);
         grid.appendChild(card);
@@ -911,7 +1009,7 @@
         ['分类', t.category],
         ['格式', t.mime || t.ext],
         ['磁盘体积', t.sizeFmt + (t.size ? ` (${t.size.toLocaleString()} B)` : '')],
-        ['来源', t.srcType === 'embedded' ? 'HAR 内嵌' : t.srcType === 'data' ? 'Data URL' : 'CDN 远程'],
+        ['来源', t.srcType === 'embedded' ? 'HAR 内嵌' : t.srcType === 'data' ? 'Data URL' : t.srcType === 'missing' ? 'HAR 无正文' : 'CDN 远程（未预览）'],
       ];
       if (t.spineName) {
         rows.push(['Spine 名称', t.spineName]);
@@ -922,14 +1020,16 @@
       if (t.sequencePrefix) rows.push(['序列帧前缀', `${t.sequencePrefix}_*`]);
       if (t.sequenceFrameCount) rows.push(['序列帧数', String(t.sequenceFrameCount)]);
       if (t.atlasRegions) rows.push(['Atlas 区域', `${t.atlasRegions} 个`]);
-      if (t.atlasFrameCount) rows.push(['Atlas 子图', `${t.atlasFrameCount} 张`]);
+      if (t.atlasFrameCount || t.frames?.length) {
+        rows.push(['Atlas 子图', `${t.atlasFrameCount || t.frames.length} 张`]);
+      }
+      if (t.matchHow) rows.push(['帧来源', t.matchHow === 'alpha-cc' ? '透明通道识别' : t.matchHow]);
       if (t.channel) rows.push(['Channel', t.channel]);
       if (t.source && t.source !== 'direct') rows.push(['资源包', t.source]);
       if (t.width && t.height) {
         rows.push(['Atlas 尺寸', `${t.width} × ${t.height}`]);
         rows.push(['VRAM 估算 (RGBA)', `${((t.width * t.height * 4) / 1024 / 1024).toFixed(2)} MB`]);
       }
-      if (t.atlasRegions) rows.push(['Atlas 子图', `${t.atlasRegions} 区域`]);
       if (t.atlasPath) rows.push(['Atlas 文件', t.atlasPath]);
       rows.push(['URL', `<a href="${t.url}" target="_blank" rel="noopener">${t.url}</a>`]);
 
@@ -943,7 +1043,89 @@
           if (item) selectAnimation(item);
         };
       }
+      renderTextureFrames(t);
       renderGrid();
+    }
+
+    let selectedTextureFrames = null;
+    let selectedFrameName = null;
+
+    function renderTextureFrames(t) {
+      const box = document.getElementById('d-frames');
+      const grid = document.getElementById('d-frames-grid');
+      const hint = document.getElementById('d-frames-hint');
+      const frames = Array.isArray(t?.frames) ? t.frames : [];
+      selectedTextureFrames = t;
+      selectedFrameName = null;
+      if (!frames.length) {
+        box.style.display = 'none';
+        grid.innerHTML = '';
+        return;
+      }
+      box.style.display = 'block';
+      document.getElementById('d-frames-title').textContent =
+        `图集子帧（${frames.length}）` +
+        (t.matchHow === 'alpha-cc' ? ' · 透明通道猜测' : '');
+      hint.textContent = '点击子帧在上方预览裁剪结果';
+      grid.innerHTML = '';
+      const sheet = new Image();
+      sheet.crossOrigin = 'anonymous';
+      sheet.onload = () => {
+        for (const fr of frames) {
+          const cell = document.createElement('div');
+          cell.className = 'frame-cell';
+          cell.title = fr.name || '';
+          const c = document.createElement('canvas');
+          try {
+            cropSpriteFrameToCanvas(sheet, fr, c);
+          } catch {
+            c.width = 1;
+            c.height = 1;
+          }
+          const label = document.createElement('div');
+          label.className = 'fn';
+          label.textContent = fr.name || `${fr.x},${fr.y}`;
+          cell.appendChild(c);
+          cell.appendChild(label);
+          cell.onclick = () => {
+            selectedFrameName = fr.name;
+            grid.querySelectorAll('.frame-cell').forEach((el) => el.classList.remove('active'));
+            cell.classList.add('active');
+            document.getElementById('d-img').src = c.toDataURL('image/png');
+            hint.textContent =
+              `${fr.name || 'frame'} · ${c.width}×${c.height}` +
+              (fr.rotated ? ' · rotated' : '');
+          };
+          grid.appendChild(cell);
+        }
+      };
+      sheet.onerror = () => {
+        hint.textContent = '图集贴图加载失败，无法预览子帧';
+        grid.innerHTML = '';
+      };
+      sheet.src = imgSrc(t);
+    }
+
+    /** Cocos SpriteFrame rect → upright canvas (rotated frames: 270°). */
+    function cropSpriteFrameToCanvas(img, fr, canvas) {
+      const sx = fr.x | 0;
+      const sy = fr.y | 0;
+      const sw = Math.max(1, fr.width | 0);
+      const sh = Math.max(1, fr.height | 0);
+      const c = canvas || document.createElement('canvas');
+      const ctx = c.getContext('2d');
+      if (fr.rotated) {
+        c.width = sh;
+        c.height = sw;
+        ctx.translate(0, sw);
+        ctx.rotate(-Math.PI / 2);
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      } else {
+        c.width = sw;
+        c.height = sh;
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      }
+      return c;
     }
 
     // ---- Animation preview ----
@@ -973,10 +1155,15 @@
     const animCanvas2d = document.getElementById('anim-canvas-2d');
     const animPlayerEl = document.getElementById('anim-player');
     const animPlayer37El = document.getElementById('anim-player-37');
+    const animPlayer4El = document.getElementById('anim-player-4');
     let spine37Active = false;
     let spine37Ready = null;
+    let spine4Active = false;
+    let spine4Ready = null;
     // 'fit' or a numeric scale factor (1 = original pixel size).
     let animZoomMode = 'fit';
+    // Cocos Spine atlases are usually premultiplied; false → black boxes on flares.
+    let spinePremultipliedAlpha = true;
     let animCtx = null;
     let animMode = 'none';
     let spineRenderer = null;
@@ -1004,6 +1191,7 @@
     function showAnimSurface(kind) {
       animPlayerEl.style.display = kind === 'player' ? 'block' : 'none';
       animPlayer37El.style.display = kind === 'player37' ? 'block' : 'none';
+      animPlayer4El.style.display = kind === 'player4' ? 'block' : 'none';
       animCanvasSpine.style.display = kind === 'canvas' ? 'block' : 'none';
       animCanvas2d.style.display = kind === '2d' ? 'block' : 'none';
     }
@@ -1013,7 +1201,7 @@
       const count = animationManifest.length || meta.previewCount || 0;
       animBtn.disabled = count === 0;
       animBtn.title = count === 0
-        ? '当前 Tab 无动画资源（仅 Cocos HAR 支持）'
+        ? '当前 Tab 无动画资源'
         : `可预览 ${animationManifest.length || count} 个`;
       if (count === 0 && viewMode === 'animations') applyViewMode('textures');
     }
@@ -1181,6 +1369,9 @@
       spine37Active = false;
       spine37Ready = null;
       animPlayer37El.src = 'about:blank';
+      spine4Active = false;
+      spine4Ready = null;
+      animPlayer4El.src = 'about:blank';
       spineInstance = null;
       spineRenderer = null;
       spineLastTs = 0;
@@ -1188,6 +1379,10 @@
 
     function spine37Send(msg) {
       animPlayer37El.contentWindow?.postMessage({ type: 'spine37', ...msg }, '*');
+    }
+
+    function spine4Send(msg) {
+      animPlayer4El.contentWindow?.postMessage({ type: 'spine4', ...msg }, '*');
     }
 
     /**
@@ -1245,9 +1440,77 @@
       }
     });
 
+    /**
+     * Spine 3.5–3.7 JSON (esp. weighted meshes / deform) yields NaN bounds on the
+     * 3.8 official player → blank viewport. Route them to the 3.7 iframe runtime.
+     * PG Soft Cocos 2.x packs are commonly 3.6.x (e.g. eajzzxhro s_scatter).
+     */
     function isSpine37(pack) {
-      return /^3\.7/.test(String(pack?.spineVersion ?? ''));
+      return /^3\.[5-7]\b/.test(String(pack?.spineVersion ?? ''));
     }
+
+    function isSpine4(pack) {
+      return /^4\./.test(String(pack?.spineVersion ?? ''));
+    }
+
+    function setupSpine4Player(pack) {
+      return new Promise((resolve, reject) => {
+        const anim =
+          pack.defaultAnimation || pack.animationNames?.[0] || '';
+        const url =
+          `spine4-player.html?skel=${encodeURIComponent(pack.skelUrl)}` +
+          `&atlas=${encodeURIComponent(pack.atlasUrl)}` +
+          (anim ? `&anim=${encodeURIComponent(anim)}` : '') +
+          `&pma=${spinePremultipliedAlpha ? '1' : '0'}`;
+        spine4Ready = { resolve, reject, pack };
+        spine4Active = true;
+        showAnimSurface('player4');
+        animPlayer4El.src = url;
+        // Timeout if iframe never reports ready
+        setTimeout(() => {
+          if (spine4Ready?.pack === pack) {
+            const pending = spine4Ready;
+            spine4Ready = null;
+            pending.reject(new Error('Spine 4 播放器超时'));
+          }
+        }, 45000);
+      });
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (msg?.type !== 'spine4' || !spine4Ready) return;
+      const { resolve, reject, pack } = spine4Ready;
+      if (msg.event === 'ready') {
+        spine4Ready = null;
+        pack._player = 'spine4';
+        pack._runtimeMissingPages = msg.missingPages || [];
+        if (animZoomMode !== 'fit') spine4Send({ cmd: 'zoom', mode: animZoomMode });
+        const clip = document.getElementById('anim-clip');
+        if (clip && Array.isArray(msg.animations) && msg.animations.length) {
+          pack.animationNames = msg.animations;
+          clip.innerHTML = msg.animations
+            .map(
+              (n) =>
+                `<option value="${n}"${n === msg.animation ? ' selected' : ''}>${n}</option>`,
+            )
+            .join('');
+        }
+        animPlaying = true;
+        const status = document.getElementById('anim-status');
+        if (status) {
+          const miss = pack._runtimeMissingPages.length
+            ? ` · 缺 ${pack._runtimeMissingPages.length} 张 atlas 页`
+            : '';
+          status.textContent = `Spine Web Player 4.1（官方 iframe）· ${msg.version}${miss}`;
+        }
+        renderAnimMeta();
+        resolve();
+      } else if (msg.event === 'error') {
+        spine4Ready = null;
+        reject(new Error(msg.message));
+      }
+    });
 
     /**
      * Override the official player's viewport to get a fixed pixel scale.
@@ -1295,7 +1558,7 @@
       const lines = String(atlasText ?? '').split('\n');
       for (let i = 0; i < lines.length - 1; i++) {
         const line = lines[i].trim();
-        if (!/\.(png|jpg|webp)$/i.test(line)) continue;
+        if (!/\.(png|jpg|webp|avif)$/i.test(line)) continue;
         const sm = lines[i + 1]?.trim().match(/^size:\s*(\d+)\s*,\s*(\d+)/i);
         if (sm) pages.push({ page: line, width: +sm[1], height: +sm[2] });
       }
@@ -1462,7 +1725,7 @@
           atlasUrl: pack.atlasUrl,
           rawDataURIs,
           animation: pack.defaultAnimation || pack.animationNames?.[0] || undefined,
-          premultipliedAlpha: false,
+          premultipliedAlpha: spinePremultipliedAlpha,
           backgroundColor: '#12151c',
           alpha: false,
           showControls: true,
@@ -1504,6 +1767,15 @@
           return;
         } catch (err) {
           console.warn('Spine 3.7 专用播放器失败，尝试 3.8', err);
+          disposeSpinePlayer();
+        }
+      }
+      if (pack.skelUrl && pack.atlasUrl && isSpine4(pack)) {
+        try {
+          await setupSpine4Player(pack);
+          return;
+        } catch (err) {
+          console.warn('Spine 4 专用播放器失败，尝试 3.8（通常会失败）', err);
           disposeSpinePlayer();
         }
       }
@@ -1601,7 +1873,7 @@
       gl.clearColor(0.07, 0.08, 0.11, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       spineRenderer.begin();
-      spineRenderer.drawSkeleton(spineInstance.skeleton, false);
+      spineRenderer.drawSkeleton(spineInstance.skeleton, spinePremultipliedAlpha);
       spineRenderer.end();
       const status = document.getElementById('anim-status');
       if (status) {
@@ -1634,6 +1906,11 @@
       if (!name) return;
       if (spine37Active) {
         spine37Send({ cmd: 'anim', name });
+        animPlaying = true;
+        return;
+      }
+      if (spine4Active) {
+        spine4Send({ cmd: 'anim', name });
         animPlaying = true;
         return;
       }
@@ -1787,7 +2064,11 @@
       ctx.clearRect(0, 0, cw, ch);
       ctx.fillStyle = '#12151c';
       ctx.fillRect(0, 0, cw, ch);
+      // Opaque-black VFX frames (flare etc.) need additive so black drops out.
+      const opaqueBlackVfx = region && region._opaqueBlackVfx;
+      if (opaqueBlackVfx) ctx.globalCompositeOperation = 'lighter';
       drawRegionLayer(ctx, img, region, cw, ch);
+      if (opaqueBlackVfx) ctx.globalCompositeOperation = 'source-over';
     }
 
     function drawAnimFrame() {
@@ -1818,7 +2099,10 @@
           animCtx.restore();
         }
       } else if (f.region && currentAnimPack.regions?.[f.region]) {
-        drawRegion(animCtx, animImage, currentAnimPack.regions[f.region], cw, ch);
+        const region = currentAnimPack.regions[f.region];
+        const additive = /flare|vfx|sparkle|particle|shine|screen/i.test(f.region);
+        if (additive) region._opaqueBlackVfx = true;
+        drawRegion(animCtx, animImage, region, cw, ch);
       }
 
       const status = document.getElementById('anim-status');
@@ -1843,6 +2127,11 @@
       if (animMode === 'spine') {
         if (spine37Active) {
           spine37Send({ cmd: 'play' });
+          animPlaying = true;
+          return;
+        }
+        if (spine4Active) {
+          spine4Send({ cmd: 'play' });
           animPlaying = true;
           return;
         }
@@ -1874,6 +2163,10 @@
         spine37Send({ cmd: 'pause' });
         return;
       }
+      if (spine4Active) {
+        spine4Send({ cmd: 'pause' });
+        return;
+      }
       if (spinePlayerWidget) {
         spinePlayerWidget.pause();
         return;
@@ -1887,6 +2180,7 @@
     function stopAnimPlayer() {
       animPlaying = false;
       if (spine37Active) spine37Send({ cmd: 'pause' });
+      if (spine4Active) spine4Send({ cmd: 'pause' });
       if (spinePlayerWidget) {
         try { spinePlayerWidget.pause(); } catch { /* ignore */ }
       }
@@ -1910,9 +2204,11 @@
         ['Spine 版本', p.spineVersion ?? '-'],
         ['播放器', p._player === 'spine37'
           ? 'Spine Runtime 3.7（专用 iframe）'
-          : p._player === 'official'
-            ? 'Spine Web Player 3.8（官方）'
-            : useSpineRuntime(p) ? 'Spine Runtime 3.8 (WebGL, 内置)' : 'Canvas 序列帧'],
+          : p._player === 'spine4'
+            ? 'Spine Web Player 4.1（官方 iframe）'
+            : p._player === 'official'
+              ? 'Spine Web Player 3.8（官方）'
+              : useSpineRuntime(p) ? 'Spine Runtime 3.8 (WebGL, 内置)' : 'Canvas 序列帧'],
         ['动画列表', (p.animationNames ?? []).join(', ') || '-'],
       ];
       const pageList = Object.values(p.texturePages ?? {});
@@ -2082,7 +2378,9 @@
         ['类型', item.kind],
         ['来源', item.paramSource || '—'],
         ['plist', item.plistUrl ? `<a href="${item.plistUrl}" target="_blank">打开</a>` : '—'],
-        ['贴图', item.textureUrl ? `<a href="${item.textureUrl}" target="_blank">打开</a>` : '—'],
+        ['贴图', item.textureUrl
+          ? `<a href="${item.textureUrl}" target="_blank">${item.textureFallback ? '占位贴图' : '打开'}</a>`
+          : '—'],
         ['uuid', item.uuid || '—'],
       ];
       if (item.note) rows.push(['备注', item.note]);
@@ -2529,7 +2827,10 @@
       }
     }
 
-    const BAKE_BUTTON_IDS = ['anim-bake-one', 'anim-bake-all', 'anim-bake-tab', 'anim-dl-one', 'anim-dl-all'];
+    const BAKE_BUTTON_IDS = [
+      'anim-bake-one', 'anim-bake-all', 'anim-bake-tab',
+      'anim-dl-one', 'anim-dl-all', 'anim-split-atlas',
+    ];
 
     function spineManifestItems() {
       return animationManifest.filter((a) => String(a.type ?? '').startsWith('spine'));
@@ -2539,17 +2840,26 @@
       if (baking) return;
       const cur = !!currentAnimPack && useSpineRuntime(currentAnimPack) && animMode === 'spine';
       const anyTab = spineManifestItems().length > 0;
+      const canSplit = !!currentAnimPack && (
+        (currentAnimPack.regions && Object.keys(currentAnimPack.regions).length > 0) ||
+        !!currentAnimPack.atlasText ||
+        !!currentAnimPack.atlasUrl
+      );
       const states = {
         'anim-bake-one': cur,
         'anim-bake-all': cur,
         'anim-dl-one': cur && !!currentAnimPack?.skelUrl,
         'anim-bake-tab': anyTab,
         'anim-dl-all': anyTab,
+        'anim-split-atlas': canSplit,
       };
       for (const [id, ok] of Object.entries(states)) {
         const btn = document.getElementById(id);
+        if (!btn) continue;
         btn.disabled = !ok;
-        btn.title = ok ? '' : '仅 Spine 动画支持';
+        btn.title = ok
+          ? ''
+          : (id === 'anim-split-atlas' ? '当前项无 atlas regions' : '仅 Spine 动画支持');
       }
     }
 
@@ -2591,6 +2901,22 @@
       return bake37Frame.contentWindow;
     }
 
+    // Spine 4.x atlas (scale:/bounds:) 不能用主页的 3.8 TextureAtlas 解析。
+    let bake4Frame = null;
+    async function ensureBake4Host() {
+      if (bake4Frame?.contentWindow?.bakeFromUrls) return bake4Frame.contentWindow;
+      await new Promise((resolve, reject) => {
+        bake4Frame = document.createElement('iframe');
+        bake4Frame.style.display = 'none';
+        bake4Frame.src = 'spine4-player.html';
+        bake4Frame.onload = resolve;
+        bake4Frame.onerror = () => reject(new Error('无法加载 4.x 烘焙宿主'));
+        document.body.appendChild(bake4Frame);
+      });
+      if (!bake4Frame.contentWindow?.bakeFromUrls) throw new Error('4.x 烘焙宿主未就绪');
+      return bake4Frame.contentWindow;
+    }
+
     /** Bake one pack with the runtime that matches its Spine version. */
     async function bakePack(pack, anims, bakeSettings, onProgress) {
       const { fps, scale, pipeline } = bakeSettings;
@@ -2600,6 +2926,16 @@
           return animPlayer37El.contentWindow.bakeFrames(bakeArgs, onProgress);
         }
         const host = await ensureBake37Host();
+        return host.bakeFromUrls(
+          { skelUrl: pack.skelUrl, atlasUrl: pack.atlasUrl, ...bakeArgs },
+          onProgress,
+        );
+      }
+      if (isSpine4(pack)) {
+        if (pack === currentAnimPack && spine4Active && animPlayer4El.contentWindow?.bakeFrames) {
+          return animPlayer4El.contentWindow.bakeFrames(bakeArgs, onProgress);
+        }
+        const host = await ensureBake4Host();
         return host.bakeFromUrls(
           { skelUrl: pack.skelUrl, atlasUrl: pack.atlasUrl, ...bakeArgs },
           onProgress,
@@ -2797,6 +3133,7 @@
     document.getElementById('anim-bake-tab').onclick = () => bakeAllPacks();
     document.getElementById('anim-dl-one').onclick = () => downloadSpinePacks(false);
     document.getElementById('anim-dl-all').onclick = () => downloadSpinePacks(true);
+    document.getElementById('anim-split-atlas').onclick = () => splitCurrentAtlas();
 
     document.getElementById('anim-play').onclick = startAnimPlayer;
     document.getElementById('anim-pause').onclick = pauseAnimPlayer;
@@ -2813,12 +3150,275 @@
     document.getElementById('anim-zoom').onchange = (e) => {
       animZoomMode = e.target.value;
       if (spine37Active) spine37Send({ cmd: 'zoom', mode: animZoomMode });
+      else if (spine4Active) spine4Send({ cmd: 'zoom', mode: animZoomMode });
       else if (spinePlayerWidget) applyOfficialZoom();
       // fallback renderer picks up animZoomMode on its next frame via fitSpineCamera
+    };
+    document.getElementById('anim-pma').onchange = async (e) => {
+      spinePremultipliedAlpha = !!e.target.checked;
+      if (currentAnimPack && useSpineRuntime(currentAnimPack) && animMode === 'spine') {
+        const status = document.getElementById('anim-status');
+        if (status) status.textContent = `切换 PMA=${spinePremultipliedAlpha}…`;
+        try {
+          await setupSpinePlayer(currentAnimPack);
+        } catch (err) {
+          console.warn('PMA 切换后重载失败', err);
+          if (status) status.textContent = `PMA 重载失败: ${err.message}`;
+        }
+      }
     };
     document.getElementById('anim-fps').oninput = (e) => {
       document.getElementById('anim-fps-val').textContent = e.target.value;
     };
+    document.getElementById('d-frames-export').onclick = () => exportTextureFramesZip();
+
+    /** Parse Spine .atlas text into {name,page,rotate,x,y,width,height,origW,origH}. */
+    function parseAtlasRegions(atlasText) {
+      const lines = normalizeAtlasText(atlasText).split(/\r?\n/);
+      const regions = [];
+      let page = null;
+      let headerLeft = 0;
+      let cur = null;
+      const flush = () => {
+        if (cur?.name) regions.push(cur);
+        cur = null;
+      };
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) {
+          flush();
+          page = null;
+          headerLeft = 0;
+          continue;
+        }
+        if (!page) {
+          page = line;
+          headerLeft = 4;
+          continue;
+        }
+        if (headerLeft > 0) {
+          headerLeft--;
+          continue;
+        }
+        if (!line.includes(':')) {
+          flush();
+          cur = {
+            name: line,
+            page,
+            rotate: false,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            origW: 0,
+            origH: 0,
+          };
+          continue;
+        }
+        if (!cur) continue;
+        const m = line.match(/^(\w+):\s*(.+)$/);
+        if (!m) continue;
+        const k = m[1].toLowerCase();
+        const v = m[2].trim();
+        if (k === 'rotate') cur.rotate = v === 'true';
+        else if (k === 'xy') {
+          const [x, y] = v.split(',').map((n) => parseInt(n.trim(), 10));
+          cur.x = x | 0;
+          cur.y = y | 0;
+        } else if (k === 'size') {
+          const [w, h] = v.split(',').map((n) => parseInt(n.trim(), 10));
+          cur.width = w | 0;
+          cur.height = h | 0;
+        } else if (k === 'orig') {
+          const [w, h] = v.split(',').map((n) => parseInt(n.trim(), 10));
+          cur.origW = w | 0;
+          cur.origH = h | 0;
+        }
+      }
+      flush();
+      return regions;
+    }
+
+    /** Spine region → upright PNG canvas (rotate:true = atlas stored 90° CW). */
+    function cropSpineRegionToCanvas(img, region) {
+      const c = document.createElement('canvas');
+      const ctx = c.getContext('2d');
+      if (region.rotate) {
+        const sw = Math.max(1, region.height | 0);
+        const sh = Math.max(1, region.width | 0);
+        c.width = Math.max(1, region.width | 0);
+        c.height = Math.max(1, region.height | 0);
+        ctx.translate(0, c.height);
+        ctx.rotate(-Math.PI / 2);
+        ctx.drawImage(img, region.x | 0, region.y | 0, sw, sh, 0, 0, sw, sh);
+      } else {
+        c.width = Math.max(1, region.width | 0);
+        c.height = Math.max(1, region.height | 0);
+        ctx.drawImage(
+          img,
+          region.x | 0, region.y | 0, c.width, c.height,
+          0, 0, c.width, c.height,
+        );
+      }
+      return c;
+    }
+
+    function canvasToPngBytes(canvas) {
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error('canvas.toBlob 失败'));
+            return;
+          }
+          blob.arrayBuffer().then((ab) => resolve(new Uint8Array(ab)), reject);
+        }, 'image/png');
+      });
+    }
+
+    function regionFileName(name) {
+      return String(name || 'region')
+        .replace(/[\\/]+/g, '__')
+        .replace(/[^\w.\u4e00-\u9fff\-]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'region';
+    }
+
+    async function resolveAtlasPageImages(pack) {
+      const pages = {};
+      const pageUrls = pack.pageUrls ?? {};
+      const texturePages = pack.texturePages ?? {};
+      const names = new Set([
+        ...Object.keys(pageUrls),
+        ...Object.keys(texturePages),
+        ...parseAtlasPageList(pack.atlasText || '').map((p) => p.page),
+      ]);
+      for (const page of names) {
+        const url = pageUrls[page]
+          || texturePages[page]?.textureSrc
+          || texturePages[page]?.textureUrl;
+        if (!url) continue;
+        try {
+          pages[page] = await loadImageSrc(url);
+        } catch {
+          /* skip missing page */
+        }
+      }
+      if (!Object.keys(pages).length && pack.textureSrc) {
+        const page = Object.keys(pageUrls)[0] || pack.texturePage || 'page.png';
+        pages[page] = await loadImageSrc(pack.textureSrc);
+      }
+      return pages;
+    }
+
+    async function splitCurrentAtlas() {
+      const pack = currentAnimPack;
+      if (!pack) return;
+      const status = document.getElementById('anim-status');
+      try {
+        if (status) status.textContent = '拆分图集中…';
+        let atlasText = pack.atlasText;
+        if (!atlasText && pack.atlasUrl) {
+          const r = await fetch(pack.atlasUrl);
+          if (!r.ok) throw new Error(`atlas ${r.status}`);
+          atlasText = await r.text();
+        }
+        let regions = parseAtlasRegions(atlasText || '');
+        if (!regions.length && pack.regions) {
+          const page = Object.keys(pack.pageUrls ?? {})[0]
+            || Object.keys(pack.texturePages ?? {})[0]
+            || 'page.png';
+          regions = Object.values(pack.regions).map((r) => ({ ...r, page: r.page || page }));
+        }
+        if (!regions.length) throw new Error('无 atlas regions');
+        const pageImgs = await resolveAtlasPageImages(pack);
+        if (!Object.keys(pageImgs).length) throw new Error('图集贴图不可用');
+        const entries = [];
+        let ok = 0;
+        let fail = 0;
+        for (let i = 0; i < regions.length; i++) {
+          const region = regions[i];
+          const img = pageImgs[region.page] || Object.values(pageImgs)[0];
+          if (!img) {
+            fail++;
+            continue;
+          }
+          try {
+            const canvas = cropSpineRegionToCanvas(img, region);
+            const data = await canvasToPngBytes(canvas);
+            entries.push({ name: `${regionFileName(region.name)}.png`, data });
+            ok++;
+          } catch {
+            fail++;
+          }
+          if (status && (i % 20 === 0 || i === regions.length - 1)) {
+            status.textContent = `拆分图集 ${i + 1}/${regions.length}…`;
+          }
+        }
+        if (!entries.length) throw new Error('没有成功裁出任何 region');
+        entries.push({
+          name: 'manifest.json',
+          data: new TextEncoder().encode(JSON.stringify({
+            pack: pack.name,
+            regionCount: regions.length,
+            exported: ok,
+            failed: fail,
+            regions: regions.map((r) => ({
+              name: r.name,
+              page: r.page,
+              rotate: !!r.rotate,
+              x: r.x,
+              y: r.y,
+              width: r.width,
+              height: r.height,
+            })),
+          }, null, 2)),
+        });
+        const zipName = `${safeName(pack.name)}_atlas_regions.zip`;
+        downloadBlob(makeZip(entries), zipName);
+        if (status) {
+          status.textContent =
+            `拆分完成：${ok} 张` + (fail ? ` · ${fail} 失败` : '') + ` → ${zipName}`;
+        }
+      } catch (err) {
+        console.error(err);
+        if (status) status.textContent = `拆分失败: ${err.message}`;
+      }
+    }
+
+    async function exportTextureFramesZip() {
+      const t = selectedTextureFrames;
+      const frames = Array.isArray(t?.frames) ? t.frames : [];
+      const hint = document.getElementById('d-frames-hint');
+      if (!t || !frames.length) return;
+      try {
+        if (hint) hint.textContent = '导出中…';
+        const img = await loadImageSrc(imgSrc(t));
+        const entries = [];
+        for (const fr of frames) {
+          const canvas = cropSpriteFrameToCanvas(img, fr);
+          const data = await canvasToPngBytes(canvas);
+          entries.push({
+            name: `${regionFileName(fr.name || `${fr.x}_${fr.y}`)}.png`,
+            data,
+          });
+        }
+        entries.push({
+          name: 'frames.json',
+          data: new TextEncoder().encode(JSON.stringify({
+            textureId: t.id,
+            fileName: t.fileName,
+            matchHow: t.matchHow || null,
+            frames,
+          }, null, 2)),
+        });
+        const zipName = `${safeName(t.fileName || t.id)}_frames.zip`;
+        downloadBlob(makeZip(entries), zipName);
+        if (hint) hint.textContent = `已导出 ${frames.length} 帧 → ${zipName}`;
+      } catch (err) {
+        console.error(err);
+        if (hint) hint.textContent = `导出失败: ${err.message}`;
+      }
+    }
+
     ['anim-search', 'anim-type-filter'].forEach((id) => {
       document.getElementById(id).addEventListener('input', renderAnimList);
       document.getElementById(id).addEventListener('change', renderAnimList);

@@ -10808,7 +10808,9 @@ var spine;
 					case spine.BlendMode.Normal: return WebGLBlendModeConverter.ONE_MINUS_SRC_ALPHA;
 					case spine.BlendMode.Additive: return WebGLBlendModeConverter.ONE;
 					case spine.BlendMode.Multiply: return WebGLBlendModeConverter.ONE_MINUS_SRC_ALPHA;
-					case spine.BlendMode.Screen: return WebGLBlendModeConverter.ONE_MINUS_SRC_ALPHA;
+					// Cocos / true Screen: ONE, ONE_MINUS_SRC_COLOR (black disappears).
+					// Spine 3.8 stock used ONE_MINUS_SRC_ALPHA → opaque-black VFX = black boxes.
+					case spine.BlendMode.Screen: return WebGLBlendModeConverter.ONE_MINUS_SRC_COLOR;
 					default: throw new Error("Unknown blend mode: " + blendMode);
 				}
 			};

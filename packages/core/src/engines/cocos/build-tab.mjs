@@ -7,7 +7,22 @@ import { extractBitmapFonts, matchAllFontTextures, fntConfigToBmFont, glyphPrevi
 import { writeParticlePacks } from './extract-particles.mjs';
 import { writeAudioPacks } from './extract-audio.mjs';
 import { detectCocosMajor } from './detect-cocos-major.mjs';
-import { readCdnCache, writeCdnCache } from './cdn-cache.mjs';
+import { readCdnCache, writeCdnCache, stableCacheRel } from './cdn-cache.mjs';
+
+/** 去 ?sign= 后的稳定键：同路径多条 HAR 条目（有/无 body）合并。 */
+function textureKey(url) {
+  return stableCacheRel(url) || pathFromUrl(url) || url;
+}
+
+/** PG / 签名 CDN：禁止用外链当预览 src（CORS / sign 过期）。 */
+function isSignedCdnUrl(url) {
+  try {
+    const u = new URL(url);
+    return /[?&]sign=/i.test(u.search) || /\.eajzzxhro\.|pragmatic/i.test(u.hostname);
+  } catch {
+    return /[?&]sign=/i.test(String(url));
+  }
+}
 
 const TEXTURE_EXT = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif',
@@ -381,6 +396,7 @@ export function buildCocosTab(harPath, outDir, src) {
 
     const size = getBodySize(entry);
     const path = pathFromUrl(url);
+    const key = textureKey(url);
     let buf = getImageBuffer(entry);
     // HAR 无 body 时，尝试按去 sign 的路径读本地 CDN 缓存
     if (!buf) {
@@ -395,11 +411,12 @@ export function buildCocosTab(harPath, outDir, src) {
       buf &&
       (mimeLow.startsWith('image/') ||
         (buf[0] === 0x89 && buf[1] === 0x50) ||
-        (buf[0] === 0xff && buf[1] === 0xd8))
+        (buf[0] === 0xff && buf[1] === 0xd8) ||
+        (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46))
     );
-    const prev = urlMap.get(url);
-    // 同 URL 可能先出现「无 body 但 Content-Length 有值」的缓存条目，
-    // 再出现带 base64 的条目；优先保留能嵌入的，避免卡在 remote。
+    const prev = urlMap.get(key);
+    // 同路径常有「空响应 / 仅 Content-Length」与「带 base64 body」两条；
+    // 按去 sign 的 key 合并，优先保留能嵌入的。
     if (prev) {
       const prevEmbed = prev.srcType === 'embedded';
       if (prevEmbed && !canEmbed) continue;
@@ -410,8 +427,8 @@ export function buildCocosTab(harPath, outDir, src) {
     const dim = imageDimensions(buf, ext);
     const texVram = dim ? dim.w * dim.h * 4 : 0;
 
-    let srcPath = url;
-    let srcType = 'remote';
+    let srcPath = '';
+    let srcType = 'missing';
 
     if (canEmbed) {
       const outFile = `${safeId(url, idx)}${ext === '(no-ext)' ? '.png' : ext}`;
@@ -420,17 +437,22 @@ export function buildCocosTab(harPath, outDir, src) {
       srcType = 'embedded';
       // 持久化到 CDN 缓存（去 sign），签名过期后仍可复用
       writeCdnCache(cdnCacheRoot, url, buf);
+    } else if (!isSignedCdnUrl(url)) {
+      // 非签名 CDN 才允许 remote 兜底；PG/sign URL 禁止外链预览
+      srcPath = url;
+      srcType = 'remote';
     }
 
-    urlMap.set(url, {
-      id: idx++,
+    const id = prev?.id ?? idx++;
+    urlMap.set(key, {
+      id,
       url,
       path,
       fileName,
       ext,
       mime,
-      size,
-      sizeFmt: fmtSize(size),
+      size: canEmbed ? (buf?.length || size) : size,
+      sizeFmt: fmtSize(canEmbed ? (buf?.length || size) : size),
       category: classifyCocosPath(path),
       src: srcPath,
       srcType,
@@ -477,6 +499,7 @@ export function buildCocosTab(harPath, outDir, src) {
       total: tagged.textures.length,
       embedded: tagged.textures.filter((t) => t.srcType === 'embedded').length,
       remote: tagged.textures.filter((t) => t.srcType === 'remote').length,
+      missing: tagged.textures.filter((t) => t.srcType === 'missing').length,
       vramBytes,
       vramFmt: fmtSize(vramBytes),
       channel: /client_type=web/i.test(pageTitle) ? 'web' : 'unknown',

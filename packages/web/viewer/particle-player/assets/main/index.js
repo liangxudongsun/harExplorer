@@ -261,6 +261,11 @@ System.register("chunks:///_virtual/ParticlePlayerHost.ts", ['./rollupPluginModL
             }
           }
 
+          // Plist often omits emissionRate; custom mode keeps 0 → no particles.
+          if (!(ps.emissionRate > 0) && ps.life > 0 && ps.totalParticles > 0) {
+            ps.emissionRate = ps.totalParticles / ps.life;
+          }
+
           // Blend factors (plist names)
           if (typeof p.blendFuncSource === 'number') {
             ps.srcBlendFactor = p.blendFuncSource;

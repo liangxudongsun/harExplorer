@@ -159,7 +159,7 @@ export function parseAtlasPages(atlasText) {
     .replace(/\\n/g, '\n')
     .replace(/\\t/g, '\t');
   const pages = [];
-  const re = /(?:^|\n)([^\n]+\.(?:png|jpg|webp))\nsize:\s*(\d+)\s*,\s*(\d+)/gi;
+  const re = /(?:^|\n)([^\n]+\.(?:png|jpg|webp|avif))\nsize:\s*(\d+)\s*,\s*(\d+)/gi;
   let m;
   while ((m = re.exec(text))) {
     pages.push({

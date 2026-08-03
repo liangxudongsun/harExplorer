@@ -9420,7 +9420,7 @@ var spine;
 					case spine.BlendMode.Normal: return WebGLBlendModeConverter.ONE_MINUS_SRC_ALPHA;
 					case spine.BlendMode.Additive: return WebGLBlendModeConverter.ONE;
 					case spine.BlendMode.Multiply: return WebGLBlendModeConverter.ONE_MINUS_SRC_ALPHA;
-					case spine.BlendMode.Screen: return WebGLBlendModeConverter.ONE_MINUS_SRC_ALPHA;
+					case spine.BlendMode.Screen: return WebGLBlendModeConverter.ONE_MINUS_SRC_COLOR;
 					default: throw new Error("Unknown blend mode: " + blendMode);
 				}
 			};

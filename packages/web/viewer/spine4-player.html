@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spine 4 Player</title>
+  <link rel="stylesheet" href="vendor/spine-player-4.1.min.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #12151c; overflow: hidden; }
+    #player {
+      width: 100%;
+      height: 100%;
+    }
+    #player .spine-player { width: 100%; height: 100%; }
+    #err {
+      display: none;
+      color: #f88;
+      font: 13px/1.4 system-ui, sans-serif;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+  </style>
+  <script src="vendor/spine-player-4.1.min.js"></script>
+  <script src="spine-bake.js"></script>
+</head>
+<body>
+  <div id="player"></div>
+  <div id="err"></div>
+  <script>
+    /**
+     * Spine 4.x sub-player (official Web Player 4.1), isolated in an iframe so
+     * its global `spine` never collides with the parent page's 3.8 build.
+     *
+     * Query: ?skel=&atlas=&anim=&pma=1
+     * Parent → child: postMessage({ type:'spine4', cmd:'play'|'pause'|'anim'|'zoom'|'pma', ... })
+     * Child → parent: postMessage({ type:'spine4', event:'ready'|'error', ... })
+     */
+    const params = new URLSearchParams(location.search);
+    const skelUrl = params.get('skel');
+    const atlasUrl = params.get('atlas');
+    const startAnim = params.get('anim') || undefined;
+    let pma = params.get('pma') !== '0';
+    let zoomMode = 'fit';
+    let widget = null;
+    let fitViewport = null;
+
+    function report(msg) {
+      parent.postMessage({ type: 'spine4', ...msg }, '*');
+    }
+
+    function showError(message) {
+      const el = document.getElementById('err');
+      el.style.display = 'block';
+      el.textContent = message;
+      document.getElementById('player').style.display = 'none';
+    }
+
+    function normalizeAtlasText(text) {
+      return String(text ?? '').replace(
+        /size:\s*(\d+)\s*,\s*(\d+)\r?\n+\r?\n+(format:)/gi,
+        'size: $1,$2\n$3',
+      );
+    }
+
+    function parseAtlasPages(atlasText) {
+      const pages = [];
+      const lines = String(atlasText ?? '').split(/\r?\n/);
+      for (let i = 0; i < lines.length - 1; i++) {
+        const line = lines[i].trim();
+        if (!/\.(png|jpg|jpeg|webp|avif)$/i.test(line)) continue;
+        const sm = lines[i + 1]?.trim().match(/^size:\s*(\d+)\s*,\s*(\d+)/i);
+        if (sm) pages.push({ page: line, width: +sm[1], height: +sm[2] });
+      }
+      return pages;
+    }
+
+    function placeholderDataUri(width, height) {
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, width);
+      c.height = Math.max(1, height);
+      return c.toDataURL('image/png');
+    }
+
+    function applyZoom() {
+      if (!widget?.currentViewport) return;
+      const vp = widget.currentViewport;
+      if (!fitViewport) fitViewport = { ...vp };
+      widget.previousViewport = null;
+      if (zoomMode === 'fit') {
+        Object.assign(vp, fitViewport);
+        return;
+      }
+      const s = parseFloat(zoomMode) || 1;
+      const cw = widget.canvas?.clientWidth || 760;
+      const ch = widget.canvas?.clientHeight || 480;
+      const cx = fitViewport.x + fitViewport.width / 2;
+      const cy = fitViewport.y + fitViewport.height / 2;
+      vp.width = cw / s;
+      vp.height = ch / s;
+      vp.x = cx - vp.width / 2;
+      vp.y = cy - vp.height / 2;
+      vp.padLeft = 0;
+      vp.padRight = 0;
+      vp.padTop = 0;
+      vp.padBottom = 0;
+    }
+
+    async function boot() {
+      if (!skelUrl || !atlasUrl) return;
+      if (!window.spine?.SpinePlayer) {
+        throw new Error('Spine Player 4.1 未加载');
+      }
+
+      // Probe atlas + pages; only inject placeholders for missing pages.
+      // Do NOT rewrite the atlas via rawDataURIs — SlotMill ships mixed
+      // classic + Spine 4.1 "bounds:" atlas formats; re-encoding can break
+      // TextureAtlas parsing.
+      const atlasRes = await fetch(atlasUrl);
+      if (!atlasRes.ok) throw new Error(`skeleton.atlas ${atlasRes.status}`);
+      const atlasText = await atlasRes.text();
+      const dir = atlasUrl.slice(0, atlasUrl.lastIndexOf('/') + 1);
+
+      const rawDataURIs = {};
+      const missingPages = [];
+      for (const page of parseAtlasPages(atlasText)) {
+        const expected = `${dir}${page.page}`;
+        let ok = false;
+        try {
+          const r = await fetch(expected);
+          ok = r.ok;
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          missingPages.push(page.page);
+          rawDataURIs[expected] = placeholderDataUri(page.width, page.height);
+        }
+      }
+
+      const host = document.getElementById('player');
+      const playerOpts = {
+        jsonUrl: skelUrl,
+        atlasUrl,
+        animation: startAnim,
+        premultipliedAlpha: pma,
+        backgroundColor: '#12151c',
+        alpha: false,
+        showControls: true,
+        success: () => {
+          try {
+            const player = widget;
+            const skel = player?.skeleton;
+            const anims = skel?.data?.animations?.map((a) => a.name) ?? [];
+            fetch(skelUrl)
+              .then((r) => r.json())
+              .then((j) => {
+                const fromJson = Object.keys(j.animations || {});
+                report({
+                  event: 'ready',
+                  animations: anims.length ? anims : fromJson,
+                  animation: startAnim || anims[0] || fromJson[0] || null,
+                  version: j.skeleton?.spine ?? '4.x',
+                  missingPages,
+                });
+              })
+              .catch(() => {
+                report({
+                  event: 'ready',
+                  animations: anims,
+                  animation: startAnim || anims[0] || null,
+                  version: '4.x',
+                  missingPages,
+                });
+              });
+            if (typeof player.setAnimation === 'function') {
+              const orig = player.setAnimation.bind(player);
+              player.setAnimation = (name, loop) => {
+                orig(name, loop);
+                fitViewport = null;
+                applyZoom();
+              };
+            }
+            applyZoom();
+            player.play?.();
+          } catch (e) {
+            console.warn(e);
+          }
+          resolveBoot();
+        },
+        error: (_w, msg) => rejectBoot(new Error(msg || 'SpinePlayer error')),
+      };
+      if (Object.keys(rawDataURIs).length) playerOpts.rawDataURIs = rawDataURIs;
+
+      let resolveBoot;
+      let rejectBoot;
+      const bootPromise = new Promise((resolve, reject) => {
+        resolveBoot = resolve;
+        rejectBoot = reject;
+      });
+      widget = new spine.SpinePlayer(host, playerOpts);
+      await bootPromise;
+    }
+
+    window.addEventListener('message', (e) => {
+      const msg = e.data;
+      if (msg?.type !== 'spine4' || !widget) return;
+      if (msg.cmd === 'play') {
+        widget.play?.();
+      } else if (msg.cmd === 'pause') {
+        widget.pause?.();
+      } else if (msg.cmd === 'anim' && msg.name) {
+        try {
+          widget.setAnimation?.(msg.name, true);
+          widget.play?.();
+        } catch (err) {
+          console.warn(err);
+        }
+      } else if (msg.cmd === 'zoom') {
+        zoomMode = msg.mode ?? 'fit';
+        applyZoom();
+      } else if (msg.cmd === 'pma') {
+        // PMA is constructor-only; parent should reload iframe when toggling.
+      }
+    });
+
+    function loadImage(src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('texture ' + src));
+        img.src = src;
+      });
+    }
+
+    async function loadAssets(skel, atlas) {
+      const [skelRes, atlasRes] = await Promise.all([fetch(skel), fetch(atlas)]);
+      if (!skelRes.ok) throw new Error(`skeleton.json ${skelRes.status}`);
+      if (!atlasRes.ok) throw new Error(`skeleton.atlas ${atlasRes.status}`);
+      const skeletonJson = await skelRes.json();
+      const atlasText = normalizeAtlasText(await atlasRes.text());
+      const dir = atlas.slice(0, atlas.lastIndexOf('/') + 1);
+      const images = {};
+      for (const page of parseAtlasPages(atlasText)) {
+        try {
+          images[page.page] = await loadImage(dir + page.page);
+        } catch {
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, page.width);
+          c.height = Math.max(1, page.height);
+          images[page.page] = c;
+        }
+      }
+      return { skeletonJson, atlasText, images };
+    }
+
+    /** Same-origin bake with the 4.1 runtime (parent calls contentWindow.bakeFrames). */
+    window.bakeFrames = async function (opts, onProgress) {
+      if (!skelUrl || !atlasUrl) {
+        return Promise.reject(new Error('4.1 播放器尚未绑定 skel/atlas'));
+      }
+      const assets = await loadAssets(skelUrl, atlasUrl);
+      return spineBakeFrames({ ...assets, ...opts }, onProgress);
+    };
+
+    /** Hidden-iframe bake host: bake any pack by URL. */
+    window.bakeFromUrls = async function ({ skelUrl: s, atlasUrl: a, ...opts }, onProgress) {
+      const assets = await loadAssets(s, a);
+      return spineBakeFrames({ ...assets, ...opts }, onProgress);
+    };
+
+    // Preview mode needs query params; bare spine4-player.html is bake-host only.
+    if (skelUrl && atlasUrl) {
+      boot().catch((err) => {
+        console.error(err);
+        showError(err.message || String(err));
+        report({ event: 'error', message: err.message || String(err) });
+      });
+    }
+  </script>
+</body>
+</html>

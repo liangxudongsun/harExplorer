@@ -117,6 +117,44 @@ function applyAtlasFilter(atlas, filter) {
   }
 }
 
+/**
+ * Resolve runtime classes across Spine 3.7/3.8 (`spine.webgl.*`) and 4.x (flat exports).
+ * 4.x TextureAtlas is `new TextureAtlas(text)` + `page.setTexture(...)` — no textureLoader.
+ */
+function resolveSpineBakeRuntime() {
+  if (!globalThis.spine) throw new Error('Spine runtime 未加载');
+  const SceneRenderer = spine.webgl?.SceneRenderer || spine.SceneRenderer;
+  const GLTexture = spine.webgl?.GLTexture || spine.GLTexture;
+  if (!SceneRenderer || !GLTexture || !spine.TextureAtlas) {
+    throw new Error('当前 Spine runtime 缺少 SceneRenderer / GLTexture / TextureAtlas');
+  }
+  return {
+    SceneRenderer,
+    GLTexture,
+    // 3.x 有 spine.webgl 命名空间；4.x player 导出是扁平的
+    isSpine4Api: !spine.webgl,
+  };
+}
+
+function createBakeAtlas(atlasText, renderer, images, GLTexture, isSpine4Api) {
+  const placeholder = () => {
+    const c = document.createElement('canvas');
+    c.width = 4;
+    c.height = 4;
+    return c;
+  };
+  const makeTex = (img) => new GLTexture(renderer.context, img ?? placeholder());
+
+  if (isSpine4Api) {
+    const atlas = new spine.TextureAtlas(atlasText);
+    for (const page of atlas.pages) {
+      page.setTexture(makeTex(images[page.name]));
+    }
+    return atlas;
+  }
+  return new spine.TextureAtlas(atlasText, (path) => makeTex(images[path]));
+}
+
 async function spineBakeFrames(opts, onProgress) {
   const {
     skeletonJson,
@@ -132,26 +170,20 @@ async function spineBakeFrames(opts, onProgress) {
   if (maxSizeOverride != null) pipe.maxSize = maxSizeOverride;
   const progress = typeof onProgress === 'function' ? onProgress : () => {};
 
+  const { SceneRenderer, GLTexture, isSpine4Api } = resolveSpineBakeRuntime();
+
   const canvas = document.createElement('canvas');
   canvas.width = 64;
   canvas.height = 64;
   const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
   if (!gl) throw new Error('WebGL 不可用');
-  const renderer = new spine.webgl.SceneRenderer(canvas, gl, false);
+  const renderer = new SceneRenderer(canvas, gl, false);
   const outCanvas = document.createElement('canvas');
   const outCtx = outCanvas.getContext('2d');
   const workCanvas = document.createElement('canvas');
   const workCtx = workCanvas.getContext('2d');
 
-  const placeholder = () => {
-    const c = document.createElement('canvas');
-    c.width = 4;
-    c.height = 4;
-    return c;
-  };
-  const atlas = new spine.TextureAtlas(atlasText, (path) =>
-    new spine.webgl.GLTexture(renderer.context, images[path] ?? placeholder()),
-  );
+  const atlas = createBakeAtlas(atlasText, renderer, images, GLTexture, isSpine4Api);
   applyAtlasFilter(atlas, pipe.filter);
 
   const base = new spine.AtlasAttachmentLoader(atlas);

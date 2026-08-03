@@ -32,6 +32,18 @@ function bundleFromUrl(url) {
   return 'unknown';
 }
 
+/** Prefer readable clips; Object.keys order often puts fastspin_* first for PG symbols. */
+function pickDefaultAnimation(names) {
+  if (!names?.length) return null;
+  const prefer = ['idle', 'win', 'spawn', 'loop', 'animation'];
+  for (const p of prefer) {
+    const hit = names.find((n) => n.toLowerCase() === p || n.toLowerCase().startsWith(p + '_'));
+    if (hit) return hit;
+  }
+  const nonFx = names.find((n) => !/^fastspin/i.test(n));
+  return nonFx ?? names[0];
+}
+
 function extractJsonObject(text, startIdx) {
   if (startIdx < 0) return null;
   let depth = 0;
@@ -321,6 +333,8 @@ function extractSpinePacksFromText(text, sourceUrl) {
     const animationNames = skeletonJson ? Object.keys(skeletonJson.animations ?? {}) : [];
     const timelines = skeletonJson ? buildAnimationTimelines(skeletonJson) : {};
     const colorTimelines = skeletonJson ? buildColorTimelines(skeletonJson) : {};
+    // Prefer idle/win over alphabetically-first clips like fastspin_exit (PG symbols).
+    const defaultAnimation = pickDefaultAnimation(animationNames);
 
     packs.push({
       id: blob.name,
@@ -340,7 +354,7 @@ function extractSpinePacksFromText(text, sourceUrl) {
       sequenceGroups,
       skeletonJson,
       animationNames,
-      defaultAnimation: animationNames[0] ?? null,
+      defaultAnimation,
       timelines,
       colorTimelines,
       spineVersion: skeletonJson?.skeleton?.spine ?? null,
